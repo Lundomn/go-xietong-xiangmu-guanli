@@ -1,0 +1,193 @@
+services:
+  mysql:
+    build:
+      context: .
+      dockerfile: deploy/docker/mysql.Dockerfile
+    image: ms-project-mysql:8.0.42
+    container_name: ms-project-mysql
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+      MYSQL_ROOT_PASSWORD: ${MS_MYSQL_ROOT_PASSWORD:?MS_MYSQL_ROOT_PASSWORD must be set}
+      MYSQL_DATABASE: ${MS_MYSQL_DATABASE:-msproject}
+    ports:
+      - "127.0.0.1:3309:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - mysql-conf:/etc/mysql/conf.d
+      - mysql-logs:/var/log/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$${MYSQL_ROOT_PASSWORD}\" --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  redis:
+    image: redis:6.2-alpine
+    container_name: ms-project-redis
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${MS_REDIS_PASSWORD:-}
+    command:
+      - /bin/sh
+      - -c
+      - >-
+        if [ -n "$${REDIS_PASSWORD}" ]; then
+          exec redis-server --appendonly yes --requirepass "$${REDIS_PASSWORD}";
+        else
+          exec redis-server --appendonly yes;
+        fi
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          if [ -n "$${REDIS_PASSWORD}" ]; then
+            redis-cli -a "$${REDIS_PASSWORD}" ping;
+          else
+            redis-cli ping;
+          fi
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.25
+    container_name: ms-project-etcd
+    restart: unless-stopped
+    command:
+      - /usr/local/bin/etcd
+      - --name=etcd0
+      - --data-dir=/etcd-data
+      - --advertise-client-urls=http://etcd:2379
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --initial-advertise-peer-urls=http://etcd:2380
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --initial-cluster=etcd0=http://etcd:2380
+      - --initial-cluster-state=new
+      - --initial-cluster-token=ms-project-etcd
+    ports:
+      - "127.0.0.1:2379:2379"
+      - "127.0.0.1:2380:2380"
+    volumes:
+      - etcd-data:/etcd-data
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/etcdctl", "endpoint", "health", "--endpoints=http://127.0.0.1:2379"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  project-user:
+    build:
+      context: .
+      dockerfile: deploy/docker/project-user.Dockerfile
+    container_name: ms-project-user
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+      GIN_MODE: ${GIN_MODE:-release}
+      MS_MYSQL_USER: ${MS_MYSQL_USER:-root}
+      MS_MYSQL_PASSWORD: ${MS_MYSQL_PASSWORD:?MS_MYSQL_PASSWORD must be set}
+      MS_MYSQL_DATABASE: ${MS_MYSQL_DATABASE:-msproject}
+      MS_REDIS_PASSWORD: ${MS_REDIS_PASSWORD:-}
+      MS_JWT_ACCESS_SECRET: ${MS_JWT_ACCESS_SECRET:?MS_JWT_ACCESS_SECRET must be set}
+      MS_JWT_REFRESH_SECRET: ${MS_JWT_REFRESH_SECRET:?MS_JWT_REFRESH_SECRET must be set}
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      etcd:
+        condition: service_healthy
+    expose:
+      - "8080"
+      - "8881"
+    ports:
+      - "127.0.0.1:8881:8881"
+    volumes:
+      - project-user-logs:/logs
+
+  project:
+    build:
+      context: .
+      dockerfile: deploy/docker/project-project.Dockerfile
+    container_name: ms-project-project
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+      GIN_MODE: ${GIN_MODE:-release}
+      MS_MYSQL_USER: ${MS_MYSQL_USER:-root}
+      MS_MYSQL_PASSWORD: ${MS_MYSQL_PASSWORD:?MS_MYSQL_PASSWORD must be set}
+      MS_MYSQL_DATABASE: ${MS_MYSQL_DATABASE:-msproject}
+      MS_REDIS_PASSWORD: ${MS_REDIS_PASSWORD:-}
+      MS_JWT_ACCESS_SECRET: ${MS_JWT_ACCESS_SECRET:?MS_JWT_ACCESS_SECRET must be set}
+      MS_JWT_REFRESH_SECRET: ${MS_JWT_REFRESH_SECRET:?MS_JWT_REFRESH_SECRET must be set}
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      etcd:
+        condition: service_healthy
+      project-user:
+        condition: service_started
+    expose:
+      - "8081"
+      - "8882"
+    ports:
+      - "127.0.0.1:8882:8882"
+    volumes:
+      - project-logs:/logs
+
+  api:
+    build:
+      context: .
+      dockerfile: deploy/docker/project-api.Dockerfile
+    container_name: ms-project-api
+    environment:
+      TZ: Asia/Shanghai
+      GIN_MODE: ${GIN_MODE:-release}
+      MS_AI_PROVIDER: ${MS_AI_PROVIDER:-local}
+      MS_AI_API_URL: ${MS_AI_API_URL:-}
+      MS_AI_API_KEY: ${MS_AI_API_KEY:-}
+      MS_AI_MODEL: ${MS_AI_MODEL:-}
+      MS_AI_TIMEOUT_SECONDS: ${MS_AI_TIMEOUT_SECONDS:-20}
+      MS_CAPTCHA_EXPOSE_CODE: ${MS_CAPTCHA_EXPOSE_CODE:-0}
+      ENABLE_PPROF: ${ENABLE_PPROF:-0}
+    restart: unless-stopped
+    depends_on:
+      etcd:
+        condition: service_healthy
+      project-user:
+        condition: service_started
+      project:
+        condition: service_started
+    ports:
+      - "127.0.0.1:8088:8088"
+    volumes:
+      - api-logs:/logs
+      - upload-data:/app/upload
+
+volumes:
+  mysql-data:
+    name: ms-project-mysql-data
+  mysql-conf:
+    name: ms-project-mysql-conf
+  mysql-logs:
+    name: ms-project-mysql-logs
+  redis-data:
+    name: ms-project-redis-data
+  etcd-data:
+    name: ms-project-etcd-data
+  project-user-logs:
+    name: ms-project-project-user-logs
+  project-logs:
+    name: ms-project-project-logs
+  api-logs:
+    name: ms-project-api-logs
+  upload-data:
+    name: ms-project-upload-data

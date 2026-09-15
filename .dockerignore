@@ -1,0 +1,7 @@
+.data
+project-api/upload
+profile_test
+*.pprof
+*.gif
+*.svg
+*.exe

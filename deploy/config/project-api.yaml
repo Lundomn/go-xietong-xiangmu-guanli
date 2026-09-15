@@ -1,0 +1,13 @@
+server:
+  name: "menu-api"
+  addr: "0.0.0.0:8088"
+zap:
+  debugFileName: "/logs/debug/api-debug.log"
+  infoFileName: "/logs/info/api-info.log"
+  warnFileName: "/logs/error/api-error.log"
+  maxSize: 500
+  maxAge: 28
+  maxBackups: 3
+etcd:
+  addrs:
+    - "etcd:2379"

@@ -1,0 +1,31 @@
+server:
+  name: "project-user"
+  addr: "0.0.0.0:8080"
+zap:
+  debugFileName: "/logs/debug/project-user-debug.log"
+  infoFileName: "/logs/info/project-user-info.log"
+  warnFileName: "/logs/error/project-user-error.log"
+  maxSize: 500
+  maxAge: 28
+  maxBackups: 3
+redis:
+  host: "redis"
+  port: 6379
+  password: ""
+  db: 0
+grpc:
+  addr: "project-user:8881"
+  name: "user"
+  version: "1.0.0"
+  weight: 2
+etcd:
+  addrs:
+    - "etcd:2379"
+mysql:
+  username: root
+  host: mysql
+  port: 3306
+  db: msproject
+jwt:
+  accessExp: 7
+  refreshExp: 14

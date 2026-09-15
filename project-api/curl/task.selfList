@@ -1,0 +1,6 @@
+curl --location --request POST 'http://127.0.0.1:8088/project/task/selfList' \
+--header 'Authorization: Bearer <ACCESS_TOKEN>' \
+--form 'page=1' \
+--form 'pageSize=10' \
+--form 'taskType=1' \
+--form 'type=0'

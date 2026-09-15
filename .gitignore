@@ -1,0 +1,22 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Go and Docker build output
+**/target/
+*.exe
+*.test
+*.test.exe
+*.pprof
+
+# Runtime data
+logs/
+**/upload/*
+!deploy/upload/.keep
+
+# Editor and operating-system files
+.DS_Store
+.idea/
+.vscode/
+
