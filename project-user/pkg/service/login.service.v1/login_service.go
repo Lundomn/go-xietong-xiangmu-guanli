@@ -8,6 +8,7 @@ import (
 	"github.com/jinzhu/copier"
 	"go.uber.org/zap"
 	"math/big"
+	"os"
 	"strconv"
 	"strings"
 	common "test.com/project-common"
@@ -24,8 +25,14 @@ import (
 	"test.com/project-user/internal/database/tran"
 	"test.com/project-user/internal/repo"
 	"test.com/project-user/internal/security/password"
+	"test.com/project-user/internal/sms"
 	"test.com/project-user/pkg/model"
 	"time"
+)
+
+const (
+	captchaTTL      = 15 * time.Minute
+	captchaCooldown = 60 * time.Second
 )
 
 type LoginService struct {
@@ -34,14 +41,22 @@ type LoginService struct {
 	memberRepo       repo.MemberRepo
 	organizationRepo repo.OrganizationRepo
 	transaction      tran.Transaction
+	smsSender        sms.Sender
+	smsConfigErr     error
 }
 
 func New() *LoginService {
+	sender, configErr := sms.NewFromEnv()
+	if configErr != nil {
+		zap.L().Error("短信云服务配置无效", zap.Error(configErr))
+	}
 	return &LoginService{
 		cache:            dao.Rc,
 		memberRepo:       dao.NewMemberDao(),
 		organizationRepo: dao.NewOrganizationDao(),
 		transaction:      dao.NewTransaction(),
+		smsSender:        sender,
+		smsConfigErr:     configErr,
 	}
 }
 
@@ -55,20 +70,60 @@ func (ls *LoginService) GetCaptcha(ctx context.Context, msg *login.CaptchaMessag
 	if !common.VerifyMobile(mobile) {
 		return nil, errs.GrpcError(model.NoLegalMobile)
 	}
-	//3.生成验证码并在返回前写入 Redis。原实现延迟写入，导致用户拿到验证码后
-	//立即注册时必然提示“验证码不存在”。
+	exposeCode := os.Getenv("MS_CAPTCHA_EXPOSE_CODE") == "1"
+	if !exposeCode {
+		if ls.smsConfigErr != nil {
+			return nil, errs.GrpcError(model.SmsConfigError)
+		}
+		if ls.smsSender == nil {
+			return nil, errs.GrpcError(model.SmsNotConfigured)
+		}
+		cooldownKey := model.RegisterRedisKey + "COOLDOWN_" + mobile
+		if _, cooldownErr := ls.cache.Get(ctx, cooldownKey); cooldownErr == nil {
+			return nil, errs.GrpcError(model.CaptchaTooFrequent)
+		} else if cooldownErr != redis.Nil {
+			zap.L().Error("验证码频率检查失败", zap.Error(cooldownErr))
+			return nil, errs.GrpcError(model.RedisError)
+		}
+	}
+	//3.生成验证码，并在发送前写入 Redis，发送失败时回滚。这样云服务
+	//不可用时不会把“已发送”的假状态返回给前端。
 	n, err := cryptorand.Int(cryptorand.Reader, big.NewInt(900000))
 	if err != nil {
 		zap.L().Error("生成验证码失败", zap.Error(err))
 		return nil, errs.GrpcError(model.CaptchaGenerateError)
 	}
 	code := strconv.FormatInt(n.Int64()+100000, 10)
-	if err = ls.cache.Put(ctx, model.RegisterRedisKey+mobile, code, 15*time.Minute); err != nil {
+	codeKey := model.RegisterRedisKey + mobile
+	if err = ls.cache.Put(ctx, codeKey, code, captchaTTL); err != nil {
 		zap.L().Error("验证码存入 Redis 失败", zap.Error(err))
 		return nil, errs.GrpcError(model.RedisError)
 	}
-	zap.L().Info("短信验证码已生成", zap.String("mobile", mobile))
+	if !exposeCode {
+		if err = ls.smsSender.Send(ctx, mobile, code); err != nil {
+			if deleteErr := ls.cache.Delete(ctx, codeKey); deleteErr != nil && deleteErr != redis.Nil {
+				zap.L().Warn("短信发送失败后清理验证码失败", zap.Error(deleteErr))
+			}
+			zap.L().Warn("短信验证码发送失败", zap.Error(err))
+			return nil, errs.GrpcError(model.SmsSendError)
+		}
+		cooldownKey := model.RegisterRedisKey + "COOLDOWN_" + mobile
+		if cooldownErr := ls.cache.Put(ctx, cooldownKey, "1", captchaCooldown); cooldownErr != nil {
+			// 短信已经发送成功，频率限制写入失败不应让用户重试并重复付费。
+			zap.L().Warn("验证码频率限制写入失败", zap.Error(cooldownErr))
+		}
+		zap.L().Info("短信验证码已发送", zap.String("mobile", maskMobile(mobile)))
+	} else {
+		zap.L().Info("本地演示验证码已生成", zap.String("mobile", maskMobile(mobile)))
+	}
 	return &login.CaptchaResponse{Code: code}, nil
+}
+
+func maskMobile(mobile string) string {
+	if len(mobile) < 7 {
+		return "***"
+	}
+	return mobile[:3] + "****" + mobile[len(mobile)-4:]
 }
 func (ls *LoginService) Register(ctx context.Context, msg *login.RegisterMessage) (*login.RegisterResponse, error) {
 	if msg == nil || msg.Name == "" || msg.Password == "" ||
@@ -155,6 +210,9 @@ func (ls *LoginService) Register(ctx context.Context, msg *login.RegisterMessage
 	if err == nil {
 		if deleteErr := ls.cache.Delete(c, model.RegisterRedisKey+msg.Mobile); deleteErr != nil && deleteErr != redis.Nil {
 			zap.L().Warn("注册成功后删除验证码失败", zap.Error(deleteErr))
+		}
+		if deleteErr := ls.cache.Delete(c, model.RegisterRedisKey+"COOLDOWN_"+msg.Mobile); deleteErr != nil && deleteErr != redis.Nil {
+			zap.L().Warn("注册成功后删除验证码频率限制失败", zap.Error(deleteErr))
 		}
 	}
 

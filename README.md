@@ -10,6 +10,7 @@
 - 任务阶段、任务创建、任务排序、负责人和任务成员
 - 任务动态、评论、工时记录
 - 附件上传、乱序分片合并和鉴权下载
+- 腾讯云短信验证码生产适配，本地支持演示模式
 - 中文本地周报生成，可选接入 OpenAI-compatible 模型
 - Vue 2 + Ant Design Vue 中文工作台，支持项目、任务、附件和 AI 周报操作
 - Docker Compose 一键启动前端、MySQL、Redis、etcd 和三个 Go 服务
@@ -117,7 +118,7 @@ POST /project/task/taskDone
 POST /project/task/dateTotalForProject
 ```
 
-验证码默认不会通过 HTTP 返回。没有短信服务的本地演示环境可在 `.env` 中设置 `MS_CAPTCHA_EXPOSE_CODE=1`，生产环境必须保持为 `0` 并接入短信供应商。
+验证码默认不会通过 HTTP 返回。没有短信服务的本地演示环境可在 `.env` 中设置 `MS_CAPTCHA_EXPOSE_CODE=1`；生产环境保持为 `0`，并配置腾讯云短信变量。完整步骤见 [`docs/cloud-services.md`](docs/cloud-services.md)。
 
 ## AI 周报
 

@@ -24,7 +24,9 @@ func New() *HandlerUser {
 func (*HandlerUser) getCaptcha(ctx *gin.Context) {
 	result := &common.Result{}
 	mobile := ctx.PostForm("mobile")
-	c, cancel := context.WithTimeout(ctx.Request.Context(), 2*time.Second)
+	// 云短信供应商通常需要 DNS、签名和一次 HTTPS 往返，给验证码请求
+	// 更充足的时间；用户注册等数据库请求仍使用更短的超时。
+	c, cancel := context.WithTimeout(ctx.Request.Context(), 10*time.Second)
 	defer cancel()
 	rsp, err := rpc.LoginServiceClient.GetCaptcha(c, &login.CaptchaMessage{Mobile: mobile})
 	if err != nil {

@@ -17,4 +17,8 @@ var (
 	MobileExist          = errs.NewError(10102006, "手机号已经存在了")
 	AccountAndPwdError   = errs.NewError(10102007, "账号密码不正确")
 	CaptchaGenerateError = errs.NewError(10102008, "验证码生成失败")
+	SmsNotConfigured     = errs.NewError(10102009, "短信云服务未配置")
+	SmsSendError         = errs.NewError(10102010, "短信发送失败，请稍后重试")
+	CaptchaTooFrequent   = errs.NewError(10102011, "验证码发送过于频繁，请稍后再试")
+	SmsConfigError       = errs.NewError(10102012, "短信云服务配置无效")
 )
