@@ -13,6 +13,7 @@
 - 腾讯云短信验证码生产适配，本地支持演示模式
 - 中文本地周报生成，可选接入 OpenAI-compatible 模型
 - Vue 2 + Ant Design Vue 中文工作台，支持项目、任务、附件和 AI 周报操作
+- k6 可重复压测、ApacheBench 基线和可选 pprof 性能排查
 - Docker Compose 一键启动前端、MySQL、Redis、etcd 和三个 Go 服务
 
 ## 技术架构
@@ -149,6 +150,10 @@ MS_AI_MODEL=your-model
 ```
 
 外部模型只在明确配置后启用；请求失败会自动降级为本地周报。项目名称、任务和动态会发送给配置的模型服务，请根据数据合规要求选择供应商。
+
+## 性能与压测
+
+压测脚本、运行参数、基线命令和性能优化优先级见 [`docs/performance.md`](docs/performance.md)。默认压测只覆盖健康检查和可选的只读接口，不会调用短信验证码、AI 周报或文件上传。
 
 ## 安全说明
 
