@@ -54,14 +54,16 @@ func (p *ProjectTemplateDao) FindProjectTemplateAll(ctx context.Context, organiz
 	session := p.conn.Session(ctx)
 	err = session.
 		Model(&data.ProjectTemplate{}).
-		Where("organization_code=?", organizationCode).
+		// "all" is what the project creation page uses: it must include
+		// system templates as well as templates owned by the current org.
+		Where("is_system=? OR organization_code=?", 1, organizationCode).
 		Limit(int(size)).
 		Offset(int((page - 1) * size)).
 		Find(&pts).Error
 	if err != nil {
 		return pts, total, err
 	}
-	err = session.Model(&data.ProjectTemplate{}).Where("organization_code=?", organizationCode).Count(&total).Error
+	err = session.Model(&data.ProjectTemplate{}).Where("is_system=? OR organization_code=?", 1, organizationCode).Count(&total).Error
 	return pts, total, err
 }
 
