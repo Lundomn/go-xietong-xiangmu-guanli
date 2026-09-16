@@ -6,7 +6,6 @@ import (
 	"github.com/jinzhu/copier"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -297,6 +296,134 @@ func (t *HandlerTask) readTask(c *gin.Context) {
 		}
 	}
 	c.JSON(200, result.Success(td))
+}
+
+func (t *HandlerTask) taskDone(c *gin.Context) {
+	result := &common.Result{}
+	var req tasks.TaskDoneReq
+	if err := c.ShouldBind(&req); err != nil || req.TaskCode == "" || (req.Done != 0 && req.Done != 1) {
+		c.JSON(http.StatusBadRequest, result.Fail(http.StatusBadRequest, "任务完成状态参数有误"))
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
+	defer cancel()
+	taskMessage, err := TaskServiceClient.TaskDone(ctx, &task.TaskReqMessage{
+		TaskCode: req.TaskCode,
+		Done:     int32(req.Done),
+		MemberId: c.GetInt64("memberId"),
+	})
+	if err != nil {
+		code, message := errs.ParseGrpcError(err)
+		c.JSON(http.StatusOK, result.Fail(code, message))
+		return
+	}
+	if taskMessage == nil {
+		c.JSON(http.StatusOK, result.Fail(http.StatusBadGateway, "任务服务返回为空"))
+		return
+	}
+	td := &tasks.TaskDisplay{}
+	if err := copier.Copy(td, taskMessage); err != nil {
+		c.JSON(http.StatusOK, result.Fail(http.StatusBadGateway, "任务响应格式错误"))
+		return
+	}
+	if td.Tags == nil {
+		td.Tags = []int{}
+	}
+	if td.ChildCount == nil {
+		td.ChildCount = []int{}
+	}
+	c.JSON(http.StatusOK, result.Success(td))
+}
+
+func (t *HandlerTask) editTask(c *gin.Context) {
+	result := &common.Result{}
+	taskCode := c.PostForm("taskCode")
+	if taskCode == "" {
+		c.JSON(http.StatusBadRequest, result.Fail(http.StatusBadRequest, "任务编号不能为空"))
+		return
+	}
+	// The legacy frontend sends one field at a time. Whitelist the fields here
+	// before passing the update to the task service.
+	fields := []string{"name", "description", "pri", "status", "begin_time", "end_time", "work_time", "like", "star", "private"}
+	field := ""
+	value := ""
+	for _, candidate := range fields {
+		if candidateValue, ok := c.GetPostForm(candidate); ok {
+			field = candidate
+			value = candidateValue
+			break
+		}
+	}
+	if field == "" {
+		c.JSON(http.StatusBadRequest, result.Fail(http.StatusBadRequest, "没有可修改的任务字段"))
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
+	defer cancel()
+	taskMessage, err := TaskServiceClient.TaskEdit(ctx, &task.TaskReqMessage{
+		TaskCode:  taskCode,
+		MemberId:  c.GetInt64("memberId"),
+		EditField: field,
+		EditValue: value,
+	})
+	if err != nil {
+		code, message := errs.ParseGrpcError(err)
+		c.JSON(http.StatusOK, result.Fail(code, message))
+		return
+	}
+	if taskMessage == nil {
+		c.JSON(http.StatusOK, result.Fail(http.StatusBadGateway, "任务服务返回为空"))
+		return
+	}
+	td := &tasks.TaskDisplay{}
+	if err := copier.Copy(td, taskMessage); err != nil {
+		c.JSON(http.StatusOK, result.Fail(http.StatusBadGateway, "任务响应格式错误"))
+		return
+	}
+	if td.Tags == nil {
+		td.Tags = []int{}
+	}
+	if td.ChildCount == nil {
+		td.ChildCount = []int{}
+	}
+	c.JSON(http.StatusOK, result.Success(td))
+}
+
+func (t *HandlerTask) assignTask(c *gin.Context) {
+	result := &common.Result{}
+	taskCode := c.PostForm("taskCode")
+	if taskCode == "" {
+		c.JSON(http.StatusBadRequest, result.Fail(http.StatusBadRequest, "任务编号不能为空"))
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
+	defer cancel()
+	taskMessage, err := TaskServiceClient.TaskAssign(ctx, &task.TaskReqMessage{
+		TaskCode: taskCode,
+		AssignTo: c.PostForm("executorCode"),
+		MemberId: c.GetInt64("memberId"),
+	})
+	if err != nil {
+		code, message := errs.ParseGrpcError(err)
+		c.JSON(http.StatusOK, result.Fail(code, message))
+		return
+	}
+	if taskMessage == nil {
+		c.JSON(http.StatusOK, result.Fail(http.StatusBadGateway, "任务服务返回为空"))
+		return
+	}
+	td := &tasks.TaskDisplay{}
+	if err := copier.Copy(td, taskMessage); err != nil {
+		c.JSON(http.StatusOK, result.Fail(http.StatusBadGateway, "任务响应格式错误"))
+		return
+	}
+	if td.Tags == nil {
+		td.Tags = []int{}
+	}
+	if td.ChildCount == nil {
+		td.ChildCount = []int{}
+	}
+	c.JSON(http.StatusOK, result.Success(td))
 }
 
 func (t *HandlerTask) listTaskMember(c *gin.Context) {
@@ -625,22 +752,12 @@ func (t *HandlerTask) downloadFile(c *gin.Context) {
 }
 
 func uploadURL(c *gin.Context, key string) string {
-	scheme := "http"
-	if c.Request.TLS != nil {
-		scheme = "https"
-	}
-	if forwarded := c.GetHeader("X-Forwarded-Proto"); forwarded != "" {
-		candidate := strings.ToLower(strings.TrimSpace(strings.Split(forwarded, ",")[0]))
-		if candidate == "http" || candidate == "https" {
-			scheme = candidate
-		}
-	}
-	host := c.Request.Host
-	if host == "" {
-		host = "localhost:8088"
-	}
 	relative := strings.TrimPrefix(filepath.ToSlash(key), "upload/")
-	return (&url.URL{Scheme: scheme, Host: host, Path: "/upload/" + relative}).String()
+	// The browser and the API are served from the same origin in both the
+	// production Nginx setup and the Vue CLI development proxy. A relative URL
+	// avoids generating an unusable container hostname or losing the frontend
+	// port when the request passes through a reverse proxy.
+	return "/project/upload/" + relative
 }
 
 func (t *HandlerTask) uploadFiles(c *gin.Context) {
@@ -901,6 +1018,11 @@ func (t *HandlerTask) taskSources(c *gin.Context) {
 	copier.Copy(&slList, sources.List)
 	if slList == nil {
 		slList = []*model.SourceLink{}
+	}
+	for _, item := range slList {
+		if item != nil {
+			item.SourceDetail.FileUrl = normalizeAttachmentURL(item.SourceDetail.FileUrl)
+		}
 	}
 	c.JSON(http.StatusOK, result.Success(slList))
 }

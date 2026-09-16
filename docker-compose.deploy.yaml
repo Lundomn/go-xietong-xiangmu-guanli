@@ -172,6 +172,24 @@ services:
       - api-logs:/logs
       - upload-data:/app/upload
 
+  frontend:
+    build:
+      context: .
+      dockerfile: deploy/docker/frontend.Dockerfile
+      args:
+        VUE_APP_API_URL: ${VUE_APP_API_URL:-}
+        VUE_APP_CROSS_DOMAIN: ${VUE_APP_CROSS_DOMAIN:-false}
+        VUE_APP_HOME_PAGE: ${VUE_APP_HOME_PAGE:-/home}
+        VUE_APP_BUILD_PATH: ${VUE_APP_BUILD_PATH:-/}
+    image: ms-project-frontend:latest
+    container_name: ms-project-frontend
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+    ports:
+      - "127.0.0.1:8080:80"
+
 volumes:
   mysql-data:
     name: ms-project-mysql-data

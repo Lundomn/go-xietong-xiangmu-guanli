@@ -65,6 +65,12 @@ type TaskSortReq struct {
 	NextTaskCode string `form:"nextTaskCode"`
 	ToStageCode  string `form:"toStageCode"`
 }
+
+type TaskDoneReq struct {
+	TaskCode string `form:"taskCode" json:"taskCode"`
+	Done     int    `form:"done" json:"done"`
+}
+
 type MyTaskReq struct {
 	Page     int64 `form:"page"`
 	PageSize int64 `form:"pageSize"`

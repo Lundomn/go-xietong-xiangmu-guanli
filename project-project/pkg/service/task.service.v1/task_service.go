@@ -4,6 +4,7 @@ import (
 	"context"
 	"github.com/jinzhu/copier"
 	"go.uber.org/zap"
+	"strconv"
 	"strings"
 	"test.com/project-common/encrypts"
 	"test.com/project-common/errs"
@@ -732,23 +733,275 @@ func (t *TaskService) ReadTask(ctx context.Context, msg *task.TaskReqMessage) (*
 		return nil, errs.GrpcError(model.TaskStagesNotNull)
 	}
 	display.StageName = taskStages.Name
-	memberMessage, err := rpc.LoginServiceClient.FindMemInfoById(ctx, &login.UserMessage{MemId: taskInfo.AssignTo})
-	if err != nil {
-		zap.L().Error("project task TaskList LoginServiceClient.FindMemInfoById error", zap.Error(err))
-		return nil, err
+	if taskInfo.AssignTo > 0 {
+		memberMessage, err := rpc.LoginServiceClient.FindMemInfoById(ctx, &login.UserMessage{MemId: taskInfo.AssignTo})
+		if err != nil {
+			zap.L().Error("project task TaskList LoginServiceClient.FindMemInfoById error", zap.Error(err))
+			return nil, err
+		}
+		if memberMessage == nil {
+			return nil, errs.GrpcError(model.DBError)
+		}
+		display.Executor = data.Executor{
+			Name:   memberMessage.Name,
+			Avatar: memberMessage.Avatar,
+		}
 	}
-	if memberMessage == nil {
-		return nil, errs.GrpcError(model.DBError)
-	}
-	e := data.Executor{
-		Name:   memberMessage.Name,
-		Avatar: memberMessage.Avatar,
-	}
-	display.Executor = e
 	var taskMessage = &task.TaskMessage{}
 	copier.Copy(taskMessage, display)
 	return taskMessage, nil
 }
+
+// TaskDone changes the completion state of a task and records the action in
+// the project activity stream. Keeping this operation in the task service
+// makes the HTTP gateway and all future clients share the same permission and
+// tenant checks as the read/write task APIs.
+func (t *TaskService) TaskDone(ctx context.Context, msg *task.TaskReqMessage) (*task.TaskMessage, error) {
+	if msg == nil || msg.MemberId <= 0 || (msg.Done != 0 && msg.Done != 1) {
+		return nil, errs.GrpcError(model.InvalidParameter)
+	}
+	taskCode := encrypts.DecryptNoErr(msg.TaskCode)
+	if taskCode <= 0 {
+		return nil, errs.GrpcError(model.InvalidParameter)
+	}
+	taskInfo, err := t.requireTaskMember(ctx, taskCode, msg.MemberId)
+	if err != nil {
+		return nil, err
+	}
+
+	done := int(msg.Done)
+	if taskInfo.Done != done {
+		if done == data.Done {
+			taskInfo.DoneBy = msg.MemberId
+			taskInfo.DoneTime = time.Now().UnixMilli()
+			taskInfo.ExecuteStatus = data.Done
+		} else {
+			taskInfo.DoneBy = 0
+			taskInfo.DoneTime = 0
+			taskInfo.ExecuteStatus = data.Wait
+		}
+		taskInfo.Done = done
+		if err := t.transaction.Action(func(conn database.DbConn) error {
+			return t.taskRepo.SaveTask(ctx, conn, taskInfo)
+		}); err != nil {
+			zap.L().Error("project task TaskDone save task error", zap.Error(err))
+			return nil, errs.GrpcError(model.DBError)
+		}
+		logType := "redo"
+		if done == data.Done {
+			logType = "done"
+		}
+		if err := createProjectLog(ctx, t.projectLogRepo, taskInfo.ProjectCode, taskInfo.Id, taskInfo.Name, msg.MemberId, taskInfo.AssignTo, logType, "task"); err != nil {
+			zap.L().Warn("project task TaskDone create project log error", zap.Error(err))
+		}
+	}
+
+	// Read the updated display through the normal path so the response contains
+	// project/stage/executor information in exactly the same shape as readTask.
+	return t.ReadTask(ctx, msg)
+}
+
+// TaskEdit updates the small set of task fields exposed by the web client.
+// Keeping the field validation here makes the gateway a thin transport layer
+// and prevents a caller from modifying arbitrary task columns.
+func (t *TaskService) TaskEdit(ctx context.Context, msg *task.TaskReqMessage) (*task.TaskMessage, error) {
+	if msg == nil || msg.MemberId <= 0 || strings.TrimSpace(msg.TaskCode) == "" {
+		return nil, errs.GrpcError(model.InvalidParameter)
+	}
+	taskInfo, err := t.requireTaskMember(ctx, encrypts.DecryptNoErr(msg.TaskCode), msg.MemberId)
+	if err != nil {
+		return nil, err
+	}
+	field := strings.ToLower(strings.TrimSpace(msg.EditField))
+	value := msg.EditValue
+	switch field {
+	case "name":
+		value = strings.TrimSpace(value)
+		if value == "" || len([]rune(value)) > 255 {
+			return nil, errs.GrpcError(model.InvalidParameter)
+		}
+		taskInfo.Name = value
+	case "description":
+		taskInfo.Description = value
+	case "pri":
+		pri, parseErr := strconv.Atoi(strings.TrimSpace(value))
+		if parseErr != nil || pri < 0 || pri > 2 {
+			return nil, errs.GrpcError(model.InvalidParameter)
+		}
+		taskInfo.Pri = pri
+	case "status":
+		status, parseErr := strconv.Atoi(strings.TrimSpace(value))
+		if parseErr != nil || status < 0 || status > 4 {
+			return nil, errs.GrpcError(model.InvalidParameter)
+		}
+		taskInfo.Status = status
+	case "begin_time", "end_time":
+		parsed := int64(0)
+		if strings.TrimSpace(value) != "" {
+			parsed = tms.ParseTime(strings.TrimSpace(value))
+			if parsed <= 0 {
+				return nil, errs.GrpcError(model.InvalidParameter)
+			}
+		}
+		if field == "begin_time" {
+			taskInfo.BeginTime = parsed
+		} else {
+			taskInfo.EndTime = parsed
+		}
+	case "work_time":
+		workTime, parseErr := strconv.Atoi(strings.TrimSpace(value))
+		if parseErr != nil || workTime < 0 {
+			return nil, errs.GrpcError(model.InvalidParameter)
+		}
+		taskInfo.WorkTime = workTime
+	case "like", "star", "private":
+		flag, parseErr := strconv.Atoi(strings.TrimSpace(value))
+		if parseErr != nil || (flag != 0 && flag != 1) {
+			return nil, errs.GrpcError(model.InvalidParameter)
+		}
+		switch field {
+		case "like":
+			taskInfo.Like = flag
+		case "star":
+			taskInfo.Star = flag
+		case "private":
+			taskInfo.Private = flag
+		}
+	default:
+		return nil, errs.GrpcError(model.InvalidParameter)
+	}
+	if err := t.transaction.Action(func(conn database.DbConn) error {
+		return t.taskRepo.SaveTask(ctx, conn, taskInfo)
+	}); err != nil {
+		return nil, errs.GrpcError(model.DBError)
+	}
+	return t.ReadTask(ctx, msg)
+}
+
+// TaskAssign changes the executor while maintaining the task-member rows
+// used by the detail panel. Both the caller and the target must belong to the
+// same project.
+func (t *TaskService) TaskAssign(ctx context.Context, msg *task.TaskReqMessage) (*task.TaskMessage, error) {
+	if msg == nil || msg.MemberId <= 0 || strings.TrimSpace(msg.TaskCode) == "" {
+		return nil, errs.GrpcError(model.InvalidParameter)
+	}
+	taskInfo, err := t.requireTaskMember(ctx, encrypts.DecryptNoErr(msg.TaskCode), msg.MemberId)
+	if err != nil {
+		return nil, err
+	}
+	assignTo := int64(0)
+	if strings.TrimSpace(msg.AssignTo) != "" {
+		assignTo = encrypts.DecryptNoErr(msg.AssignTo)
+		if assignTo <= 0 {
+			return nil, errs.GrpcError(model.InvalidParameter)
+		}
+	}
+	if assignTo > 0 {
+		members, _, findErr := t.projectRepo.FindProjectMemberByPid(ctx, taskInfo.ProjectCode)
+		if findErr != nil {
+			return nil, errs.GrpcError(model.DBError)
+		}
+		inProject := false
+		for _, member := range members {
+			if member != nil && member.MemberCode == assignTo {
+				inProject = true
+				break
+			}
+		}
+		if !inProject {
+			return nil, errs.GrpcError(model.InvalidParameter)
+		}
+	}
+	members, _, findErr := t.taskRepo.FindTaskMemberPage(ctx, taskInfo.Id, 1, 1000)
+	if findErr != nil {
+		return nil, errs.GrpcError(model.DBError)
+	}
+	if err := t.transaction.Action(func(conn database.DbConn) error {
+		taskInfo.AssignTo = assignTo
+		if err := t.taskRepo.SaveTask(ctx, conn, taskInfo); err != nil {
+			return err
+		}
+		var selected *data.TaskMember
+		for _, member := range members {
+			if member == nil {
+				continue
+			}
+			member.IsExecutor = model.NoExecutor
+			if member.MemberCode == assignTo {
+				selected = member
+				member.IsExecutor = model.Executor
+			}
+			if err := t.taskRepo.SaveTaskMember(ctx, conn, member); err != nil {
+				return err
+			}
+		}
+		if assignTo > 0 && selected == nil {
+			return t.taskRepo.SaveTaskMember(ctx, conn, &data.TaskMember{
+				TaskCode:   taskInfo.Id,
+				MemberCode: assignTo,
+				JoinTime:   time.Now().UnixMilli(),
+				IsExecutor: model.Executor,
+			})
+		}
+		return nil
+	}); err != nil {
+		return nil, errs.GrpcError(model.DBError)
+	}
+	return t.ReadTask(ctx, msg)
+}
+
+// FileAction provides the file-page mutations that are safe to perform from
+// the task service. File ownership is checked through the file's project
+// membership before any metadata is changed.
+func (t *TaskService) FileAction(ctx context.Context, msg *task.TaskReqMessage) (*task.TaskSourceMessage, error) {
+	if msg == nil || msg.MemberId <= 0 || strings.TrimSpace(msg.FileCode) == "" {
+		return nil, errs.GrpcError(model.InvalidParameter)
+	}
+	fileID := encrypts.DecryptNoErr(msg.FileCode)
+	if fileID <= 0 {
+		return nil, errs.GrpcError(model.InvalidParameter)
+	}
+	files, err := t.fileRepo.FindByIds(ctx, []int64{fileID})
+	if err != nil {
+		return nil, errs.GrpcError(model.DBError)
+	}
+	if len(files) == 0 || files[0] == nil {
+		return nil, errs.GrpcError(model.InvalidParameter)
+	}
+	file := files[0]
+	if err := t.requireProjectMember(ctx, file.ProjectCode, msg.MemberId); err != nil {
+		return nil, err
+	}
+	switch strings.ToLower(strings.TrimSpace(msg.FileAction)) {
+	case "edit":
+		title := strings.TrimSpace(msg.FileTitle)
+		if title == "" || len([]rune(title)) > 255 || strings.ContainsAny(title, "/\\") {
+			return nil, errs.GrpcError(model.InvalidParameter)
+		}
+		file.Title = title
+	case "recycle":
+		file.Deleted = model.Deleted
+		file.DeletedTime = time.Now().UnixMilli()
+	case "recovery":
+		file.Deleted = model.NoDeleted
+		file.DeletedTime = 0
+	case "delete":
+		if err := t.fileRepo.Delete(ctx, file.Id); err != nil {
+			return nil, errs.GrpcError(model.DBError)
+		}
+		if err := t.sourceLinkRepo.DeleteBySourceCode(ctx, file.Id); err != nil {
+			return nil, errs.GrpcError(model.DBError)
+		}
+		return &task.TaskSourceMessage{SourceDetail: &task.SourceDetail{PathName: file.PathName}}, nil
+	default:
+		return nil, errs.GrpcError(model.InvalidParameter)
+	}
+	if err := t.fileRepo.Save(ctx, file); err != nil {
+		return nil, errs.GrpcError(model.DBError)
+	}
+	return &task.TaskSourceMessage{}, nil
+}
+
 func (t *TaskService) ListTaskMember(ctx context.Context, msg *task.TaskReqMessage) (*task.TaskMemberList, error) {
 	if msg == nil || msg.MemberId <= 0 {
 		return nil, errs.GrpcError(model.InvalidParameter)

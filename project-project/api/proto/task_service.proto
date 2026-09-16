@@ -1,6 +1,6 @@
 syntax = "proto3";
 package task.service.v1;
-option go_package = "project-project/pkg/service/task.service.v1";
+option go_package = "project-project/pkg/service/task.service.v1;task";
 
 message TaskReqMessage {
   int64 memberId = 1;
@@ -23,6 +23,12 @@ message TaskReqMessage {
   int64 beginTime = 18;
   string commentContent = 19;
   repeated string Mentions = 20;
+  int32 done = 21;
+  string editField = 22;
+  string editValue = 23;
+  string fileCode = 24;
+  string fileTitle = 25;
+  string fileAction = 26;
 }
 
 message TaskStagesMessage{
@@ -283,6 +289,10 @@ service TaskService {
   rpc TaskSort(TaskReqMessage) returns (TaskSortResponse){}
   rpc MyTaskList(TaskReqMessage) returns (MyTaskListResponse){}
   rpc ReadTask(TaskReqMessage) returns (TaskMessage){}
+  rpc TaskDone(TaskReqMessage) returns (TaskMessage){}
+  rpc TaskEdit(TaskReqMessage) returns (TaskMessage){}
+  rpc TaskAssign(TaskReqMessage) returns (TaskMessage){}
+  rpc FileAction(TaskReqMessage) returns (TaskSourceMessage){}
   rpc ListTaskMember(TaskReqMessage) returns(TaskMemberList){}
   rpc TaskLog(TaskReqMessage) returns(TaskLogList){}
   rpc TaskWorkTimeList(TaskReqMessage) returns(TaskWorkTimeResponse){}

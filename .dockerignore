@@ -2,6 +2,10 @@
 project-api/upload
 profile_test
 *.pprof
-*.gif
-*.svg
 *.exe
+# The deploy Dockerfiles copy the three build artifacts from target/.
+# Keep source dependencies and frontend caches excluded below.
+frontend/node_modules
+frontend/dist
+.env
+.env.*

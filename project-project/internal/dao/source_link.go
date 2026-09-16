@@ -20,6 +20,10 @@ func (s *SourceLinkDao) FindByTaskCode(ctx context.Context, taskCode int64) (lis
 	return
 }
 
+func (s *SourceLinkDao) DeleteBySourceCode(ctx context.Context, sourceCode int64) error {
+	return s.conn.Session(ctx).Where("source_type=? and source_code=?", "file", sourceCode).Delete(&data.SourceLink{}).Error
+}
+
 func NewSourceLinkDao() *SourceLinkDao {
 	return &SourceLinkDao{
 		conn: gorms.New(),

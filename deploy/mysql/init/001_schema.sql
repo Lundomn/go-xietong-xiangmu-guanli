@@ -346,9 +346,21 @@ INSERT INTO ms_task_stages_template (name, project_template_code, create_time, s
 SELECT '已完成', 1, UNIX_TIMESTAMP(CURRENT_TIMESTAMP) * 1000, 1
 WHERE NOT EXISTS (SELECT 1 FROM ms_task_stages_template WHERE project_template_code = 1 AND name = '已完成');
 
-INSERT IGNORE INTO ms_project_menu
+INSERT INTO ms_project_menu
     (id, pid, title, icon, url, file_path, params, node, sort, status, create_by, is_inner, `values`, show_slider)
 VALUES
-    (1, 0, '项目管理', 'project', '/project', '', '', 'project', 1, 1, 0, 0, '', 1),
-    (2, 1, '项目列表', 'list', '/project', '', '', 'project-list', 1, 1, 0, 0, '', 1),
-    (3, 1, '我的任务', 'task', '/task', '', '', 'task-list', 2, 1, 0, 0, '', 1);
+    (1, 0, '工作台', 'home', '/home', 'home/index', '', 'home', 1, 1, 0, 0, '', 0),
+    (2, 0, '项目管理', 'project', '/project', '', '', 'project', 2, 1, 0, 0, '', 1),
+    (3, 2, '项目列表', 'list', '/project/list/my', 'project/list/index', '', 'project-list', 1, 1, 0, 0, '', 1),
+    (4, 2, '我的任务', 'task', '/task', 'home/index', '', 'task-list', 2, 1, 0, 1, '', 1)
+ON DUPLICATE KEY UPDATE
+    pid = VALUES(pid),
+    title = VALUES(title),
+    icon = VALUES(icon),
+    url = VALUES(url),
+    file_path = VALUES(file_path),
+    node = VALUES(node),
+    sort = VALUES(sort),
+    status = VALUES(status),
+    is_inner = VALUES(is_inner),
+    show_slider = VALUES(show_slider);
