@@ -199,6 +199,22 @@ POST /project/project/health
 
 ## 测试与检查
 
+本地一键执行静态检查：
+
+```bash
+./scripts/verify.sh
+```
+
+启动 Docker Compose 后执行完整前后端 Smoke Test：
+
+```bash
+MS_CAPTCHA_EXPOSE_CODE=1 ./scripts/smoke.sh
+```
+
+Smoke Test 会真实走过健康检查、注册、登录、创建项目、创建任务、单文件上传、乱序分片合并与鉴权下载、项目健康度、AI 周报和项目列表，并在数据库中创建一组带有 `smoke` 前缀的验收数据。验证码明文返回只允许在隔离的本地/CI 环境开启，生产环境必须关闭并接入短信服务。
+
+GitHub Actions 会自动执行 Go 测试、`go vet`、竞态测试、前端构建、Helm 模板校验和 Docker Compose 全链路 Smoke Test。
+
 ```bash
 export GOPROXY=https://goproxy.cn,direct
 export GOSUMDB=off
@@ -209,7 +225,7 @@ for module in project-common project-user project-api project-project; do
 done
 ```
 
-AI 周报的本地生成、远程模型成功和远程失败降级均有单元测试；部署验收覆盖注册、登录、项目、任务、工时、评论、分片附件、部门、权限、项目状态和周报链路。
+AI 周报的本地生成、远程模型成功和远程失败降级均有单元测试；部署验收通过 Smoke Test 覆盖注册、登录、项目、任务、附件下载、项目健康度和周报主链路。
 
 前端构建检查：
 

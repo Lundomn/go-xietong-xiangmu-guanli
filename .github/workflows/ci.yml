@@ -1,0 +1,159 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go ${{ matrix.module }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - project-common
+          - project-user
+          - project-api
+          - project-project
+    defaults:
+      run:
+        working-directory: ${{ matrix.module }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22.x'
+          cache: true
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+
+      - name: Test
+        run: go test ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Race test
+        run: go test -race ./...
+
+  frontend:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        env:
+          NODE_OPTIONS: --openssl-legacy-provider
+        run: npm run build
+
+  helm:
+    name: Helm chart
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Lint chart
+        run: >-
+          helm lint ./deploy/helm/go-xietong
+          --set secrets.mysqlRootPassword=ci-root-password
+          --set secrets.mysqlPassword=ci-password
+          --set secrets.jwtAccessSecret=ci-access-secret
+          --set secrets.jwtRefreshSecret=ci-refresh-secret
+
+      - name: Render chart
+        run: >-
+          helm template go-xietong ./deploy/helm/go-xietong
+          --namespace go-xietong
+          --set secrets.mysqlRootPassword=ci-root-password
+          --set secrets.mysqlPassword=ci-password
+          --set secrets.jwtAccessSecret=ci-access-secret
+          --set secrets.jwtRefreshSecret=ci-refresh-secret
+          > /tmp/go-xietong-rendered.yaml
+
+  integration:
+    name: Full stack smoke test
+    runs-on: ubuntu-latest
+    needs: [go, frontend, helm]
+    env:
+      MS_MYSQL_ROOT_PASSWORD: ci-root-password
+      MS_MYSQL_USER: root
+      MS_MYSQL_PASSWORD: ci-root-password
+      MS_MYSQL_DATABASE: msproject
+      MS_JWT_ACCESS_SECRET: ci-access-secret
+      MS_JWT_REFRESH_SECRET: ci-refresh-secret
+      MS_REDIS_PASSWORD: ''
+      MS_CAPTCHA_EXPOSE_CODE: '1'
+      MS_SMS_PROVIDER: none
+      GIN_MODE: release
+      ENABLE_PPROF: '0'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22.x'
+          cache: false
+
+      - name: Build Linux services
+        run: ./scripts/build.sh
+
+      - name: Start Docker Compose stack
+        run: docker compose -f docker-compose.deploy.yaml up -d --build
+
+      - name: Wait for services
+        run: |
+          for attempt in $(seq 1 90); do
+            if curl -fsS http://127.0.0.1:8088/health >/dev/null && \
+              curl -fsS http://127.0.0.1:8080/health >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose -f docker-compose.deploy.yaml ps
+          exit 1
+
+      - name: Run end-to-end smoke test
+        env:
+          SMOKE_BASE_URL: http://127.0.0.1:8088
+          SMOKE_FRONTEND_URL: http://127.0.0.1:8080
+        run: ./scripts/smoke.sh
+
+      - name: Show service logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.deploy.yaml logs --no-color
+
+      - name: Stop stack
+        if: always()
+        run: docker compose -f docker-compose.deploy.yaml down -v

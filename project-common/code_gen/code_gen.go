@@ -7,19 +7,21 @@ import (
 	"gorm.io/gorm/logger"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"text/template"
 )
 
 func connectMysql() *gorm.DB {
-	//配置MySQL连接参数
-	username := "root"    //账号
-	password := "root"    //密码
-	host := "127.0.0.1"   //数据库地址，可以是Ip或者域名
-	port := 3309          //数据库端口
-	Dbname := "msproject" //数据库名
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=True&loc=Local", username, password, host, port, Dbname)
-	fmt.Println(dsn)
+	// Code generation is an explicit developer tool. Read its connection from
+	// environment variables instead of keeping credentials in source or
+	// printing a password-bearing DSN to the test output.
+	username := envOrDefault("CODEGEN_MYSQL_USER", "root")
+	password := os.Getenv("CODEGEN_MYSQL_PASSWORD")
+	host := envOrDefault("CODEGEN_MYSQL_HOST", "127.0.0.1")
+	port := envIntOrDefault("CODEGEN_MYSQL_PORT", 3309)
+	dbName := envOrDefault("CODEGEN_MYSQL_DATABASE", "msproject")
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=True&loc=Local", username, password, host, port, dbName)
 	var err error
 	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Info),
@@ -28,6 +30,21 @@ func connectMysql() *gorm.DB {
 		panic("连接数据库失败, error=" + err.Error())
 	}
 	return db
+}
+
+func envOrDefault(key, fallback string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func envIntOrDefault(key string, fallback int) int {
+	value, err := strconv.Atoi(os.Getenv(key))
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
 }
 
 type Result struct {

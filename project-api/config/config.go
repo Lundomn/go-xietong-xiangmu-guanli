@@ -4,6 +4,7 @@ import (
 	"github.com/spf13/viper"
 	"log"
 	"os"
+	"path/filepath"
 	"test.com/project-common/logs"
 )
 
@@ -36,7 +37,7 @@ func InitConfig() *Config {
 	conf.viper.SetConfigName("config")
 	conf.viper.SetConfigType("yaml")
 	conf.viper.AddConfigPath("/etc/ms_project/user")
-	conf.viper.AddConfigPath(workDir + "/config")
+	addConfigPaths(conf.viper, workDir)
 	err := conf.viper.ReadInConfig()
 	if err != nil {
 		log.Fatalln(err)
@@ -45,6 +46,16 @@ func InitConfig() *Config {
 	conf.InitZapLog()
 	conf.ReadEtcdConfig()
 	return conf
+}
+
+func addConfigPaths(v *viper.Viper, workDir string) {
+	for current := filepath.Clean(workDir); ; current = filepath.Dir(current) {
+		v.AddConfigPath(filepath.Join(current, "config"))
+		parent := filepath.Dir(current)
+		if parent == current {
+			return
+		}
+	}
 }
 
 func (c *Config) InitZapLog() {

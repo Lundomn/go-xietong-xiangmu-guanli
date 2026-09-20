@@ -2,6 +2,7 @@ package project
 
 import (
 	"context"
+	"errors"
 	"github.com/gin-gonic/gin"
 	"github.com/jinzhu/copier"
 	"io"
@@ -707,6 +708,69 @@ func safeUploadPart(value string) bool {
 	return true
 }
 
+func validateUploadRequest(req model.UploadFileReq) error {
+	if req.TotalChunks < 1 || req.ChunkNumber < 1 || req.ChunkNumber > req.TotalChunks {
+		return errors.New("分片参数无效")
+	}
+	if req.TotalChunks > maxUploadChunks {
+		return errors.New("分片数量超过限制")
+	}
+	if !safeUploadPart(req.ProjectCode) || !safeUploadPart(req.TaskCode) {
+		return errors.New("项目或任务编号无效")
+	}
+	if req.TotalSize < 0 || int64(req.TotalSize) > maxUploadSize {
+		return errors.New("文件大小超过限制")
+	}
+	if req.TotalChunks > 1 && !safeUploadPart(req.Identifier) {
+		return errors.New("分片标识无效")
+	}
+	return nil
+}
+
+func mergeUploadParts(uploadDir, identifier, filename string, totalChunks int) (string, error) {
+	finalPath := filepath.Join(uploadDir, filename)
+	assemblingPath := finalPath + ".assembling"
+	assembled, err := os.OpenFile(assemblingPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		return "", err
+	}
+
+	cleanup := func() {
+		_ = assembled.Close()
+		_ = os.Remove(assemblingPath)
+	}
+	for i := 1; i <= totalChunks; i++ {
+		part := filepath.Join(uploadDir, identifier+"."+strconv.Itoa(i)+".part")
+		inputPart, openErr := os.Open(part)
+		if openErr != nil {
+			cleanup()
+			return "", openErr
+		}
+		_, copyErr := io.Copy(assembled, inputPart)
+		closeErr := inputPart.Close()
+		if copyErr != nil || closeErr != nil {
+			cleanup()
+			if copyErr != nil {
+				return "", copyErr
+			}
+			return "", closeErr
+		}
+		if removeErr := os.Remove(part); removeErr != nil && !os.IsNotExist(removeErr) {
+			cleanup()
+			return "", removeErr
+		}
+	}
+	if err = assembled.Close(); err != nil {
+		_ = os.Remove(assemblingPath)
+		return "", err
+	}
+	if err = os.Rename(assemblingPath, finalPath); err != nil {
+		_ = os.Remove(assemblingPath)
+		return "", err
+	}
+	return finalPath, nil
+}
+
 func (t *HandlerTask) downloadFile(c *gin.Context) {
 	result := &common.Result{}
 	relative := strings.TrimPrefix(filepath.ToSlash(c.Param("filepath")), "/")
@@ -768,24 +832,8 @@ func (t *HandlerTask) uploadFiles(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, result.Fail(http.StatusBadRequest, "上传参数格式有误"))
 		return
 	}
-	if req.TotalChunks < 1 || req.ChunkNumber < 1 || req.ChunkNumber > req.TotalChunks {
-		c.JSON(http.StatusBadRequest, result.Fail(http.StatusBadRequest, "分片参数无效"))
-		return
-	}
-	if req.TotalChunks > maxUploadChunks {
-		c.JSON(http.StatusBadRequest, result.Fail(http.StatusBadRequest, "分片数量超过限制"))
-		return
-	}
-	if !safeUploadPart(req.ProjectCode) || !safeUploadPart(req.TaskCode) {
-		c.JSON(http.StatusBadRequest, result.Fail(http.StatusBadRequest, "项目或任务编号无效"))
-		return
-	}
-	if req.TotalSize < 0 || int64(req.TotalSize) > maxUploadSize {
-		c.JSON(http.StatusBadRequest, result.Fail(http.StatusBadRequest, "文件大小超过限制"))
-		return
-	}
-	if req.TotalChunks > 1 && !safeUploadPart(req.Identifier) {
-		c.JSON(http.StatusBadRequest, result.Fail(http.StatusBadRequest, "分片标识无效"))
+	if err := validateUploadRequest(req); err != nil {
+		c.JSON(http.StatusBadRequest, result.Fail(http.StatusBadRequest, err.Error()))
 		return
 	}
 
@@ -908,45 +956,13 @@ func (t *HandlerTask) uploadFiles(c *gin.Context) {
 			return
 		}
 
-		finalPath := filepath.Join(uploadDir, filename)
-		assemblingPath := finalPath + ".assembling"
-		assembled, err := os.OpenFile(assemblingPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
-		if err != nil {
-			c.JSON(http.StatusOK, result.Fail(http.StatusInternalServerError, "创建合并文件失败"))
-			return
-		}
-		for i := 1; i <= req.TotalChunks; i++ {
-			part := filepath.Join(uploadDir, req.Identifier+"."+strconv.Itoa(i)+".part")
-			inputPart, openErr := os.Open(part)
-			if openErr != nil {
-				_ = assembled.Close()
-				_ = os.Remove(assemblingPath)
+		finalPath, mergeErr := mergeUploadParts(uploadDir, req.Identifier, filename, req.TotalChunks)
+		if mergeErr != nil {
+			if errors.Is(mergeErr, os.ErrNotExist) {
 				c.JSON(http.StatusOK, result.Fail(http.StatusBadRequest, "分片尚未上传完整"))
-				return
-			}
-			_, copyErr = io.Copy(assembled, inputPart)
-			closeErr := inputPart.Close()
-			if copyErr != nil || closeErr != nil {
-				_ = assembled.Close()
-				_ = os.Remove(assemblingPath)
+			} else {
 				c.JSON(http.StatusOK, result.Fail(http.StatusInternalServerError, "合并分片失败"))
-				return
 			}
-			if removeErr := os.Remove(part); removeErr != nil && !os.IsNotExist(removeErr) {
-				_ = assembled.Close()
-				_ = os.Remove(assemblingPath)
-				c.JSON(http.StatusOK, result.Fail(http.StatusInternalServerError, "清理分片失败"))
-				return
-			}
-		}
-		if err = assembled.Close(); err != nil {
-			_ = os.Remove(assemblingPath)
-			c.JSON(http.StatusOK, result.Fail(http.StatusInternalServerError, "关闭合并文件失败"))
-			return
-		}
-		if err = os.Rename(assemblingPath, finalPath); err != nil {
-			_ = os.Remove(assemblingPath)
-			c.JSON(http.StatusOK, result.Fail(http.StatusInternalServerError, "发布合并文件失败"))
 			return
 		}
 		key = finalPath
