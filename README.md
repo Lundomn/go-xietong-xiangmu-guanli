@@ -205,10 +205,13 @@ POST /project/project/health
 ./scripts/verify.sh
 ```
 
-启动 Docker Compose 后执行完整前后端 Smoke Test：
+在隔离的本地/CI 环境启动带演示验证码的 Compose，再执行完整前后端 Smoke Test：
 
 ```bash
-MS_CAPTCHA_EXPOSE_CODE=1 ./scripts/smoke.sh
+MS_CAPTCHA_EXPOSE_CODE=1 docker compose -f docker-compose.deploy.yaml up -d --build
+SMOKE_BASE_URL=http://127.0.0.1:8088 \
+SMOKE_FRONTEND_URL=http://127.0.0.1:8080 \
+./scripts/smoke.sh
 ```
 
 Smoke Test 会真实走过健康检查、注册、登录、创建项目、创建任务、单文件上传、乱序分片合并与鉴权下载、项目健康度、AI 周报和项目列表，并在数据库中创建一组带有 `smoke` 前缀的验收数据。验证码明文返回只允许在隔离的本地/CI 环境开启，生产环境必须关闭并接入短信服务。
