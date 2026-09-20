@@ -45,3 +45,6 @@ export function _projectStats(data) {
 export function _getProjectReport(data) {
     return $http.post('project/project/_getProjectReport', data);
 }
+export function health(data) {
+    return $http.post('project/project/health', data);
+}

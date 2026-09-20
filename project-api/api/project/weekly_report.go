@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"test.com/project-api/pkg/health"
 	"test.com/project-api/pkg/report"
 	common "test.com/project-common"
 	"test.com/project-common/errs"
@@ -73,6 +74,7 @@ func (p *HandlerProject) weeklyReport(c *gin.Context) {
 		c.JSON(http.StatusOK, result.Fail(code, message))
 		return
 	}
+	healthSummary := buildWeeklyHealthSummary(projectCode, detail.Name, detail.EndTime, tasks, activities)
 
 	generated := report.NewGenerator().Generate(ctx, report.Input{
 		ProjectCode: projectCode,
@@ -82,6 +84,7 @@ func (p *HandlerProject) weeklyReport(c *gin.Context) {
 		Focus:       strings.TrimSpace(req.Focus),
 		Tasks:       tasks,
 		Activities:  activities,
+		Health:      healthSummary,
 	})
 	c.JSON(http.StatusOK, result.Success(generated))
 }
@@ -143,6 +146,7 @@ func collectWeeklyData(ctx context.Context, projectCode string, memberID int64, 
 			Name:        item.Name,
 			Description: item.Description,
 			Assignee:    assignee,
+			CreatedAt:   item.CreateTime,
 			EndAt:       item.EndTime,
 			Priority:    int(item.Pri),
 			Done:        item.Done == 1 || strings.EqualFold(item.ExecuteStatus, "done"),
@@ -154,6 +158,44 @@ func collectWeeklyData(ctx context.Context, projectCode string, memberID int64, 
 		return nil, nil, err
 	}
 	return reportTasks, activities, nil
+}
+
+func buildWeeklyHealthSummary(projectCode, projectName, projectEnd string, tasks []report.Task, activities []report.Activity) *report.HealthSummary {
+	healthTasks := make([]health.Task, 0, len(tasks))
+	for _, item := range tasks {
+		healthTasks = append(healthTasks, health.Task{
+			ID:        item.ID,
+			Name:      item.Name,
+			Assignee:  item.Assignee,
+			CreatedAt: item.CreatedAt,
+			EndAt:     item.EndAt,
+			Priority:  item.Priority,
+			Done:      item.Done,
+		})
+	}
+	healthActivities := make([]health.Activity, 0, len(activities))
+	for _, item := range activities {
+		healthActivities = append(healthActivities, health.Activity{At: item.At})
+	}
+	snapshot := health.Analyze(health.Input{
+		ProjectCode: projectCode,
+		ProjectName: projectName,
+		Tasks:       healthTasks,
+		Activities:  healthActivities,
+		ProjectEnd:  projectHealthDate(projectEnd),
+		Now:         time.Now(),
+	})
+	evidence := make([]string, 0, len(snapshot.Evidence))
+	for _, item := range snapshot.Evidence {
+		evidence = append(evidence, item.Title+"："+item.Detail)
+	}
+	return &report.HealthSummary{
+		Score:       snapshot.Score,
+		Level:       snapshot.Level,
+		LevelCode:   snapshot.LevelCode,
+		Evidence:    evidence,
+		Suggestions: snapshot.Suggestions,
+	}
 }
 
 type taskLogResult struct {

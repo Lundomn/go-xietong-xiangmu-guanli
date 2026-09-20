@@ -56,6 +56,78 @@
                     </a-spin>
                 </div>
             </div>
+            <div class="overview-item m-b health-overview">
+                <div class="content-item">
+                    <div class="health-header">
+                        <div>
+                            <h3 class="health-title">项目健康度与风险雷达</h3>
+                            <span class="muted">规则引擎评分，风险证据可追溯</span>
+                        </div>
+                        <a-button size="small" icon="reload" :loading="healthRadar.loading"
+                                  @click="getProjectHealth">刷新分析</a-button>
+                    </div>
+                    <a-spin :spinning="healthRadar.loading">
+                        <div v-if="healthRadar.data" class="health-content">
+                            <div class="health-score">
+                                <a-progress type="circle" :percent="healthRadar.data.score || 0"
+                                            :strokeColor="healthColor(healthRadar.data.level_code)"/>
+                                <a-tag :color="healthTagColor(healthRadar.data.level_code)">
+                                    {{healthRadar.data.level}}
+                                </a-tag>
+                            </div>
+                            <div class="health-summary">
+                                <h4>{{healthRadar.data.summary}}</h4>
+                                <a-row :gutter="12" class="health-metrics">
+                                    <a-col :span="6">
+                                        <span class="muted">任务总数</span>
+                                        <strong>{{healthRadar.data.metrics.total_tasks}}</strong>
+                                    </a-col>
+                                    <a-col :span="6">
+                                        <span class="muted">完成率</span>
+                                        <strong>{{healthRadar.data.metrics.completion_rate}}%</strong>
+                                    </a-col>
+                                    <a-col :span="6">
+                                        <span class="muted">逾期任务</span>
+                                        <strong>{{healthRadar.data.metrics.overdue_tasks}}</strong>
+                                    </a-col>
+                                    <a-col :span="6">
+                                        <span class="muted">待分配</span>
+                                        <strong>{{healthRadar.data.metrics.unassigned_tasks}}</strong>
+                                    </a-col>
+                                </a-row>
+                                <a-tag color="blue">{{healthRadar.data.method === 'rules' ? '可解释规则评分' : healthRadar.data.method}}</a-tag>
+                                <a-tag v-if="healthRadar.data.activity_source === 'task_event_fallback'" color="orange">
+                                    动态服务降级分析
+                                </a-tag>
+                            </div>
+                            <a-row :gutter="12" class="health-details">
+                                <a-col :span="12">
+                                    <a-card size="small" title="风险证据">
+                                        <ul class="health-list">
+                                            <li v-for="(item, index) in healthRadar.data.evidence" :key="'evidence-' + index">
+                                                <a-tag :color="item.level === 'high' ? 'red' : 'orange'">
+                                                    {{item.level === 'high' ? '高' : '中'}}
+                                                </a-tag>
+                                                <span><strong>{{item.title}}</strong>：{{item.detail}}</span>
+                                            </li>
+                                            <li v-if="!healthRadar.data.evidence.length" class="health-empty">暂未发现明显风险</li>
+                                        </ul>
+                                    </a-card>
+                                </a-col>
+                                <a-col :span="12">
+                                    <a-card size="small" title="建议行动">
+                                        <ul class="health-list">
+                                            <li v-for="(item, index) in healthRadar.data.suggestions" :key="'suggestion-' + index">
+                                                {{item}}
+                                            </li>
+                                        </ul>
+                                    </a-card>
+                                </a-col>
+                            </a-row>
+                        </div>
+                    </a-spin>
+                </div>
+            </div>
             <div class="overview-item">
                 <div class="content-left">
                     <div class="content-item log-list">
@@ -271,6 +343,12 @@
             <a-alert v-if="weeklyReportData" class="m-b" type="info"
                      :message="'生成方式：' + (weeklyReportData.generated_by === 'ai' ? 'AI 模型' : '本地分析兜底')"
                      :description="weeklyReportData.period ? (weeklyReportData.period.start + ' 至 ' + weeklyReportData.period.end) : ''"/>
+            <div v-if="weeklyReportData && weeklyReportData.health" class="weekly-health-summary">
+                <a-tag :color="healthTagColor(weeklyReportData.health.level_code)">
+                    风险雷达：{{weeklyReportData.health.score}} 分（{{weeklyReportData.health.level}}）
+                </a-tag>
+                <span class="muted">周报已使用规则引擎生成的风险证据作为上下文</span>
+            </div>
             <div v-if="weeklyReportData" class="weekly-report-content">
                 <a-row :gutter="12" class="weekly-report-stats">
                     <a-col :span="6"><a-statistic title="任务总数" :value="weeklyReportData.stats.total_tasks"/></a-col>
@@ -317,7 +395,7 @@
 <script>
     import moment from "moment";
     import VeLine from 'v-charts/lib/line.common'
-    import {_getProjectReport, _projectStats, read as getProject} from "../../../api/project";
+    import {_getProjectReport, _projectStats, health as getProjectHealthData, read as getProject} from "../../../api/project";
     import {collect} from "../../../api/projectCollect";
     import {checkResponse} from "../../../assets/js/utils";
     import {getStore, setStore} from "../../../assets/js/storage";
@@ -343,6 +421,10 @@
                 projectDate: [],
                 activities: [],
                 projectInfoList: [],
+                healthRadar: {
+                    loading: true,
+                    data: null,
+                },
                 weeklyPeriod: [moment().startOf('isoWeek'), moment().endOf('isoWeek')],
                 weeklyReportData: null,
                 weeklyReportModal: {
@@ -519,6 +601,7 @@
                 this.overviewForProject();
                 this.getProjectStats();
                 this.getProjectReport();
+                this.getProjectHealth();
             },
             getProject() {
                 this.loading = true;
@@ -608,7 +691,7 @@
                     }
                     const taskStats = res.data;
                     const total = taskStats['total'];
-                    this.projectStats.forEach((v, k) => {
+                    this.projectStats.forEach((v) => {
                         v.number = Number(taskStats[v.key] || 0);
                         if (total) {
                             v.schedule = parseInt(v.number / total * 100);
@@ -635,6 +718,36 @@
                     });
                     this.chartData.rows = list;
                 })
+            },
+            getProjectHealth() {
+                this.healthRadar.loading = true;
+                getProjectHealthData({projectCode: this.code}).then(res => {
+                    if (checkResponse(res) && res.data) {
+                        this.healthRadar.data = res.data;
+                    }
+                }).finally(() => {
+                    this.healthRadar.loading = false;
+                });
+            },
+            healthColor(level) {
+                const colors = {
+                    healthy: '#52c41a',
+                    watch: '#faad14',
+                    risk: '#fa8c16',
+                    critical: '#f5222d',
+                    unknown: '#1890ff',
+                };
+                return colors[level] || colors.unknown;
+            },
+            healthTagColor(level) {
+                const colors = {
+                    healthy: 'green',
+                    watch: 'gold',
+                    risk: 'orange',
+                    critical: 'red',
+                    unknown: 'blue',
+                };
+                return colors[level] || colors.unknown;
             },
             createInfo() {
                 let app = this;
@@ -801,6 +914,10 @@
             margin-bottom: 16px;
         }
 
+        .weekly-health-summary {
+            margin-bottom: 16px;
+        }
+
         .report-list {
             min-height: 78px;
             margin: 0;
@@ -815,6 +932,80 @@
             white-space: pre-wrap;
             background: #fafafa;
             border-radius: 4px;
+        }
+    }
+
+    .health-overview {
+        .health-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin: 6px 0 18px;
+        }
+
+        .health-title {
+            display: inline-block;
+            margin: 0 10px 0 0;
+        }
+
+        .health-content {
+            display: flex;
+            flex-wrap: wrap;
+        }
+
+        .health-score {
+            width: 150px;
+            text-align: center;
+
+            .ant-tag {
+                margin-top: 8px;
+            }
+        }
+
+        .health-summary {
+            flex: 1;
+            min-width: 520px;
+
+            h4 {
+                margin: 12px 0 18px;
+                font-size: 16px;
+            }
+        }
+
+        .health-metrics {
+            margin-bottom: 14px;
+
+            > div {
+                display: flex;
+                flex-direction: column;
+                padding: 8px 0;
+                border-right: 1px solid #f0f0f0;
+            }
+
+            strong {
+                margin-top: 4px;
+                font-size: 18px;
+            }
+        }
+
+        .health-details {
+            width: 100%;
+            margin-top: 18px;
+        }
+
+        .health-list {
+            min-height: 72px;
+            margin: 0;
+            padding-left: 18px;
+
+            li {
+                margin: 6px 0;
+                line-height: 1.6;
+            }
+        }
+
+        .health-empty {
+            color: #52c41a;
         }
     }
 

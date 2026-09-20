@@ -37,6 +37,7 @@ type Task struct {
 	Name        string
 	Description string
 	Assignee    string
+	CreatedAt   string
 	EndAt       string
 	Priority    int
 	Done        bool
@@ -60,6 +61,17 @@ type Input struct {
 	Focus       string
 	Tasks       []Task
 	Activities  []Activity
+	Health      *HealthSummary
+}
+
+// HealthSummary is kept independent from the health package so the report
+// renderer can consume a snapshot without introducing a package cycle.
+type HealthSummary struct {
+	Score       int      `json:"score"`
+	Level       string   `json:"level"`
+	LevelCode   string   `json:"level_code"`
+	Evidence    []string `json:"evidence"`
+	Suggestions []string `json:"suggestions"`
 }
 
 type Period struct {
@@ -79,15 +91,16 @@ type Stats struct {
 
 // WeeklyReport is returned by the weekly report endpoint.
 type WeeklyReport struct {
-	ProjectCode string   `json:"project_code"`
-	ProjectName string   `json:"project_name"`
-	Period      Period   `json:"period"`
-	Stats       Stats    `json:"stats"`
-	Highlights  []string `json:"highlights"`
-	Risks       []string `json:"risks"`
-	NextSteps   []string `json:"next_steps"`
-	Markdown    string   `json:"markdown"`
-	GeneratedBy string   `json:"generated_by"`
+	ProjectCode string         `json:"project_code"`
+	ProjectName string         `json:"project_name"`
+	Period      Period         `json:"period"`
+	Stats       Stats          `json:"stats"`
+	Health      *HealthSummary `json:"health,omitempty"`
+	Highlights  []string       `json:"highlights"`
+	Risks       []string       `json:"risks"`
+	NextSteps   []string       `json:"next_steps"`
+	Markdown    string         `json:"markdown"`
+	GeneratedBy string         `json:"generated_by"`
 }
 
 // ResolvePeriod returns a [start, end) period. With no dates it uses the current
@@ -220,6 +233,7 @@ func BuildLocalReport(input Input) WeeklyReport {
 	report := WeeklyReport{
 		ProjectCode: input.ProjectCode,
 		ProjectName: input.ProjectName,
+		Health:      input.Health,
 		Period: Period{
 			Start: input.Start.In(reportLocation).Format(dateLayout),
 			End:   input.End.AddDate(0, 0, -1).In(reportLocation).Format(dateLayout),
@@ -243,6 +257,9 @@ func BuildLocalReport(input Input) WeeklyReport {
 	}
 	if stats.ActivityCount > 0 {
 		report.Highlights = append(report.Highlights, fmt.Sprintf("本周期记录 %d 条任务动态，项目协作保持活跃。", stats.ActivityCount))
+	}
+	if input.Health != nil {
+		report.Highlights = append(report.Highlights, fmt.Sprintf("项目健康度为 %d 分，当前状态：%s。", input.Health.Score, input.Health.Level))
 	}
 
 	for _, item := range limitTasks(overdueTasks, 5) {
@@ -275,6 +292,14 @@ func BuildLocalReport(input Input) WeeklyReport {
 	}
 	if len(report.NextSteps) == 0 {
 		report.NextSteps = append(report.NextSteps, "确认下周目标，给新增任务补齐负责人、截止时间和验收标准。")
+	}
+	if input.Health != nil {
+		for _, suggestion := range limitStrings(input.Health.Suggestions, 3) {
+			if suggestion == "" || containsString(report.NextSteps, suggestion) {
+				continue
+			}
+			report.NextSteps = append(report.NextSteps, suggestion)
+		}
 	}
 
 	report.Markdown = renderMarkdown(report, input.Focus)
@@ -313,6 +338,15 @@ func limitStrings(values []string, limit int) []string {
 	return values[:limit]
 }
 
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
 func renderMarkdown(report WeeklyReport, focus string) string {
 	var builder strings.Builder
 	focus = strings.TrimSpace(focus)
@@ -330,6 +364,15 @@ func renderMarkdown(report WeeklyReport, focus string) string {
 		report.Stats.OverdueTasks,
 		report.Stats.ActivityCount,
 	))
+	if report.Health != nil {
+		builder.WriteString("## 项目健康度\n\n")
+		builder.WriteString(fmt.Sprintf("- 健康度：%d/100（%s）\n", report.Health.Score, report.Health.Level))
+		if len(report.Health.Evidence) > 0 {
+			builder.WriteString("- 风险证据：\n")
+			writeItems(&builder, report.Health.Evidence)
+		}
+		builder.WriteString("\n")
+	}
 	builder.WriteString("## 本周亮点\n\n")
 	writeItems(&builder, report.Highlights)
 	builder.WriteString("\n## 风险与阻塞\n\n")
@@ -490,6 +533,7 @@ func buildPrompt(input Input, localReport WeeklyReport) string {
 		"period":       localReport.Period,
 		"focus":        input.Focus,
 		"stats":        localReport.Stats,
+		"health":       input.Health,
 		"tasks":        tasks,
 		"activities":   activities,
 	}

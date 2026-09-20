@@ -12,6 +12,7 @@
 - 附件上传、乱序分片合并和鉴权下载
 - 腾讯云短信验证码生产适配，本地支持演示模式
 - 中文本地周报生成，可选接入 OpenAI-compatible 模型
+- 项目健康度与风险雷达：规则评分、证据解释和可执行建议，AI 不可用时仍可运行
 - Vue 2 + Ant Design Vue 中文工作台，支持项目、任务、附件和 AI 周报操作
 - k6 可重复压测、ApacheBench 基线和可选 pprof 性能排查
 - Docker Compose 一键启动前端、MySQL、Redis、etcd 和三个 Go 服务
@@ -113,6 +114,7 @@ POST /project/project
 POST /project/task_stages
 POST /project/task/save
 POST /project/report/weekly
+POST /project/project/health
 POST /project/project/_projectStats
 POST /project/project/_getProjectReport
 POST /project/task/taskDone
@@ -150,6 +152,18 @@ MS_AI_MODEL=your-model
 ```
 
 外部模型只在明确配置后启用；请求失败会自动降级为本地周报。项目名称、任务和动态会发送给配置的模型服务，请根据数据合规要求选择供应商。
+
+## 项目健康度与风险雷达
+
+接口：
+
+```text
+POST /project/project/health
+```
+
+接口从任务、负责人、截止日期和项目动态计算 0-100 分健康度，并同时返回风险证据和建议行动。评分采用可解释的规则引擎：逾期、高优先级任务、无人负责、长期未更新和临近截止日期分别产生有上限的扣分，避免“黑盒 AI 分数”。项目动态服务异常时会退回任务创建/完成事件，并在 `activity_source` 标记降级来源。
+
+这也是 AI 周报的基础数据层：规则引擎保证事实和数字稳定，AI 只负责把证据转换成中文管理建议，从而降低幻觉、调用成本和不可复现问题。详细字段和面试讲解见 [`docs/health-radar.md`](docs/health-radar.md)。
 
 ## 性能与压测
 

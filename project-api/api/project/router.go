@@ -35,6 +35,7 @@ func (*RouterProject) Route(r *gin.Engine) {
 	group.POST("/project/getLogBySelfProject", h.getLogBySelfProject)
 	group.POST("/project/_projectStats", h.projectStats)
 	group.POST("/project/_getProjectReport", h.projectReport)
+	group.POST("/project/health", h.projectHealth)
 	group.POST("/report/weekly", h.weeklyReport)
 	t := NewTask()
 	// Attachments are served through an authenticated task-aware handler instead

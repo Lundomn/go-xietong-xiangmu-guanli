@@ -51,6 +51,24 @@ func TestBuildLocalReportFindsOverdueAndUnassignedTasks(t *testing.T) {
 	}
 }
 
+func TestBuildLocalReportIncludesHealthContext(t *testing.T) {
+	generated := BuildLocalReport(Input{
+		ProjectName: "研发协同",
+		Health: &HealthSummary{
+			Score:     68,
+			Level:     "风险",
+			LevelCode: "risk",
+			Evidence:  []string{"存在逾期未完成任务：有 2 个任务已逾期。"},
+		},
+	})
+	if generated.Health == nil || generated.Health.Score != 68 {
+		t.Fatalf("health context was not retained: %+v", generated.Health)
+	}
+	if !strings.Contains(generated.Markdown, "项目健康度") || !strings.Contains(generated.Markdown, "68/100") {
+		t.Fatalf("markdown did not include health context: %s", generated.Markdown)
+	}
+}
+
 func TestInPeriodSupportsServiceTimestamp(t *testing.T) {
 	start := time.Date(2026, 9, 7, 0, 0, 0, 0, reportLocation)
 	end := start.AddDate(0, 0, 7)
