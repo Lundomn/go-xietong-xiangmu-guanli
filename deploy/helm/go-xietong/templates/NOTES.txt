@@ -1,0 +1,16 @@
+Go 协同项目管理系统已安装。
+
+1. 查看工作负载：
+   kubectl get pods,svc -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }}
+
+2. 未配置 Ingress 时，可通过端口转发访问前端：
+   kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "go-xietong.fullname" . }}-frontend 8080:80
+   http://127.0.0.1:8080
+
+3. 配置 Ingress 时，请将域名解析到 Ingress Controller，并访问：
+   http{{ if .Values.ingress.tls }}s{{ end }}://{{ .Values.ingress.host }}
+
+注意：
+- API 前端镜像内置 Nginx 会把 /api 和 /project/upload 转发到 Service "{{ include "go-xietong.apiServiceName" . }}"。
+- 默认部署的是单副本 MySQL、Redis 和 etcd，适合演示/单节点环境；生产环境建议使用托管服务或独立高可用集群。
+- 文件上传默认使用 ReadWriteMany PVC，多副本 API 需要集群提供对应的 StorageClass；也可以改造为 COS/MinIO 对象存储。

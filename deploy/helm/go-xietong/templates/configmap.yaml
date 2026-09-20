@@ -1,0 +1,85 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "go-xietong.fullname" . }}-config
+  labels:
+    {{- include "go-xietong.labels" . | nindent 4 }}
+data:
+  project-user.yaml: |-
+    server:
+      name: "project-user"
+      addr: "0.0.0.0:8080"
+    zap:
+      debugFileName: "/logs/debug/project-user-debug.log"
+      infoFileName: "/logs/info/project-user-info.log"
+      warnFileName: "/logs/error/project-user-error.log"
+      maxSize: 500
+      maxAge: 28
+      maxBackups: 3
+    redis:
+      host: "{{ include "go-xietong.redisHost" . }}"
+      port: {{ if .Values.redis.enabled }}{{ .Values.redis.service.port }}{{ else }}{{ .Values.external.redis.port }}{{ end }}
+      password: ""
+      db: 0
+    grpc:
+      addr: "{{ include "go-xietong.userServiceName" . }}:8881"
+      name: "user"
+      version: "1.0.0"
+      weight: 2
+    etcd:
+      addrs:
+        - "{{ include "go-xietong.etcdHost" . }}:{{ if .Values.etcd.enabled }}{{ .Values.etcd.service.clientPort }}{{ else }}{{ .Values.external.etcd.port }}{{ end }}"
+    mysql:
+      username: "{{ .Values.mysql.username }}"
+      host: "{{ include "go-xietong.mysqlHost" . }}"
+      port: {{ if .Values.mysql.enabled }}{{ .Values.mysql.service.port }}{{ else }}{{ .Values.external.mysql.port }}{{ end }}
+      db: "{{ .Values.mysql.database }}"
+    jwt:
+      accessExp: 7
+      refreshExp: 14
+  project-project.yaml: |-
+    server:
+      name: "project-project"
+      addr: "0.0.0.0:8081"
+    zap:
+      debugFileName: "/logs/debug/project-debug.log"
+      infoFileName: "/logs/info/project-info.log"
+      warnFileName: "/logs/error/project-error.log"
+      maxSize: 500
+      maxAge: 28
+      maxBackups: 3
+    redis:
+      host: "{{ include "go-xietong.redisHost" . }}"
+      port: {{ if .Values.redis.enabled }}{{ .Values.redis.service.port }}{{ else }}{{ .Values.external.redis.port }}{{ end }}
+      password: ""
+      db: 0
+    grpc:
+      addr: "{{ include "go-xietong.projectServiceName" . }}:8882"
+      name: "project"
+      version: "1.0.0"
+      weight: 2
+    etcd:
+      addrs:
+        - "{{ include "go-xietong.etcdHost" . }}:{{ if .Values.etcd.enabled }}{{ .Values.etcd.service.clientPort }}{{ else }}{{ .Values.external.etcd.port }}{{ end }}"
+    mysql:
+      username: "{{ .Values.mysql.username }}"
+      host: "{{ include "go-xietong.mysqlHost" . }}"
+      port: {{ if .Values.mysql.enabled }}{{ .Values.mysql.service.port }}{{ else }}{{ .Values.external.mysql.port }}{{ end }}
+      db: "{{ .Values.mysql.database }}"
+    jwt:
+      accessExp: 7
+      refreshExp: 14
+  project-api.yaml: |-
+    server:
+      name: "menu-api"
+      addr: "0.0.0.0:8088"
+    zap:
+      debugFileName: "/logs/debug/api-debug.log"
+      infoFileName: "/logs/info/api-info.log"
+      warnFileName: "/logs/error/api-error.log"
+      maxSize: 500
+      maxAge: 28
+      maxBackups: 3
+    etcd:
+      addrs:
+        - "{{ include "go-xietong.etcdHost" . }}:{{ if .Values.etcd.enabled }}{{ .Values.etcd.service.clientPort }}{{ else }}{{ .Values.external.etcd.port }}{{ end }}"

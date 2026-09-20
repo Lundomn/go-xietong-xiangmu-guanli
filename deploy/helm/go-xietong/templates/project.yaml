@@ -1,0 +1,107 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "go-xietong.projectServiceName" . }}
+  labels:
+    {{- include "go-xietong.labels" . | nindent 4 }}
+    app.kubernetes.io/component: project
+spec:
+  type: ClusterIP
+  ports:
+    - name: grpc
+      port: {{ .Values.project.service.port }}
+      targetPort: grpc
+  selector:
+    {{- include "go-xietong.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: project
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "go-xietong.fullname" . }}-project
+  labels:
+    {{- include "go-xietong.labels" . | nindent 4 }}
+    app.kubernetes.io/component: project
+spec:
+  replicas: {{ .Values.project.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "go-xietong.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: project
+  template:
+    metadata:
+      labels:
+        {{- include "go-xietong.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: project
+    spec:
+      securityContext:
+        fsGroup: 10001
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: project
+          image: "{{ .Values.images.project.repository }}:{{ .Values.images.project.tag }}"
+          imagePullPolicy: {{ .Values.images.project.pullPolicy }}
+          ports:
+            - name: grpc
+              containerPort: 8882
+          env:
+            - name: TZ
+              value: Asia/Shanghai
+            - name: GIN_MODE
+              value: {{ .Values.runtime.ginMode | quote }}
+            - name: MS_MYSQL_USER
+              value: {{ .Values.mysql.username | quote }}
+            - name: MS_MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "go-xietong.secretName" . }}
+                  key: MS_MYSQL_PASSWORD
+            - name: MS_MYSQL_DATABASE
+              value: {{ .Values.mysql.database | quote }}
+            - name: MS_REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "go-xietong.secretName" . }}
+                  key: MS_REDIS_PASSWORD
+            - name: MS_JWT_ACCESS_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "go-xietong.secretName" . }}
+                  key: MS_JWT_ACCESS_SECRET
+            - name: MS_JWT_REFRESH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "go-xietong.secretName" . }}
+                  key: MS_JWT_REFRESH_SECRET
+          readinessProbe:
+            tcpSocket:
+              port: grpc
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            tcpSocket:
+              port: grpc
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 3
+          resources:
+            {{- toYaml .Values.project.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /app/config/config.yaml
+              subPath: project-project.yaml
+            - name: logs
+              mountPath: /logs
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "go-xietong.fullname" . }}-config
+            items:
+              - key: project-project.yaml
+                path: project-project.yaml
+        - name: logs
+          emptyDir: {}

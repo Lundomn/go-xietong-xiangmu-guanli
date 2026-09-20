@@ -16,6 +16,7 @@
 - Vue 2 + Ant Design Vue 中文工作台，支持项目、任务、附件和 AI 周报操作
 - k6 可重复压测、ApacheBench 基线和可选 pprof 性能排查
 - Docker Compose 一键启动前端、MySQL、Redis、etcd 和三个 Go 服务
+- Kubernetes + Helm 部署包，支持探针、PVC、Ingress 和外部依赖切换
 
 ## 技术架构
 
@@ -45,6 +46,7 @@ project-project   项目、任务、工时、评论和附件元数据服务
 project-grpc      gRPC 协议生成代码
 project-common    加密、错误码、时间、服务发现和公共运行逻辑
 deploy            Dockerfile、服务配置和 MySQL 初始化脚本
+deploy/helm       Kubernetes/Helm 部署包
 docs              功能说明
 ```
 
@@ -90,6 +92,23 @@ npm run serve
 ```bash
 docker compose -f docker-compose.deploy.yaml down
 ```
+
+## Kubernetes + Helm 部署
+
+项目同时提供 Helm Chart，适合部署到 Kubernetes。Chart 默认包含前端、API 网关、两个 Go 微服务、MySQL、Redis、etcd、配置、密钥、健康探针和文件上传 PVC，并可选开启 HPA；生产环境可以通过 values 切换到外部 MySQL、Redis、etcd。
+
+完整说明见 [`deploy/helm/go-xietong/README.md`](deploy/helm/go-xietong/README.md)。最小安装示例：
+
+```bash
+helm upgrade --install go-xietong ./deploy/helm/go-xietong \
+  --namespace go-xietong --create-namespace \
+  --set secrets.mysqlRootPassword='change-this-root-password' \
+  --set secrets.mysqlPassword='change-this-root-password' \
+  --set secrets.jwtAccessSecret='change-this-access-secret' \
+  --set secrets.jwtRefreshSecret='change-this-refresh-secret'
+```
+
+本地开发仍建议使用 Docker Compose；Kubernetes Chart 的默认依赖是单副本，生产环境应使用托管数据库/缓存、支持 RWX 的文件存储和 HTTPS Ingress。
 
 ## 验证接口
 

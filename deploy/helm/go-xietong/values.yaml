@@ -1,0 +1,172 @@
+# Images must be built and pushed before installing the chart into a remote
+# cluster. For a local cluster, imagePullPolicy=IfNotPresent is convenient.
+images:
+  api:
+    repository: ms-project-api
+    tag: latest
+    pullPolicy: IfNotPresent
+  project:
+    repository: ms-project-project
+    tag: latest
+    pullPolicy: IfNotPresent
+  user:
+    repository: ms-project-user
+    tag: latest
+    pullPolicy: IfNotPresent
+  frontend:
+    repository: ms-project-frontend
+    tag: latest
+    pullPolicy: IfNotPresent
+  mysql:
+    repository: ms-project-mysql
+    tag: 8.0.42
+    pullPolicy: IfNotPresent
+  redis:
+    repository: redis
+    tag: 6.2-alpine
+    pullPolicy: IfNotPresent
+  etcd:
+    repository: quay.io/coreos/etcd
+    tag: v3.5.25
+    pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+api:
+  replicaCount: 1
+  # The frontend image's Nginx config proxies /api and /project/upload to a
+  # Service named "api", so keep this name unless the frontend config is also
+  # rebuilt with a different upstream.
+  service:
+    name: api
+    type: ClusterIP
+    port: 8088
+  resources: {}
+
+project:
+  replicaCount: 1
+  service:
+    port: 8882
+  resources: {}
+
+user:
+  replicaCount: 1
+  service:
+    port: 8881
+  resources: {}
+
+frontend:
+  replicaCount: 1
+  service:
+    type: ClusterIP
+    port: 80
+  resources: {}
+
+mysql:
+  enabled: true
+  replicaCount: 1
+  username: root
+  database: msproject
+  service:
+    port: 3306
+  resources: {}
+
+redis:
+  enabled: true
+  replicaCount: 1
+  service:
+    port: 6379
+  resources: {}
+
+etcd:
+  enabled: true
+  replicaCount: 1
+  service:
+    clientPort: 2379
+    peerPort: 2380
+  resources: {}
+
+# Set enabled=false for a managed/external dependency and provide its host.
+external:
+  mysql:
+    host: ""
+    port: 3306
+  redis:
+    host: ""
+    port: 6379
+  etcd:
+    host: ""
+    port: 2379
+
+secrets:
+  # Use an existing Secret with the documented keys when values must not be
+  # passed on the Helm command line.
+  existingSecret: ""
+  mysqlRootPassword: ""
+  mysqlPassword: ""
+  redisPassword: ""
+  jwtAccessSecret: ""
+  jwtRefreshSecret: ""
+
+runtime:
+  ginMode: release
+  captchaExposeCode: "0"
+  enablePprof: "0"
+  ai:
+    provider: local
+    apiURL: ""
+    apiKey: ""
+    model: ""
+    timeoutSeconds: "20"
+  sms:
+    provider: none
+    secretID: ""
+    secretKey: ""
+    region: ap-guangzhou
+    endpoint: https://sms.tencentcloudapi.com
+    sdkAppID: ""
+    signName: ""
+    templateID: ""
+    countryCode: "+86"
+    sessionContext: go-xietong-xiangmu-guanli
+    timeoutSeconds: "8"
+
+persistence:
+  mysql:
+    enabled: true
+    size: 10Gi
+    storageClass: ""
+  redis:
+    enabled: true
+    size: 2Gi
+    storageClass: ""
+  etcd:
+    enabled: true
+    size: 2Gi
+    storageClass: ""
+  uploads:
+    enabled: true
+    size: 20Gi
+    storageClass: ""
+
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+  host: go-xietong.example.com
+  tls: []
+
+# Requires metrics-server and CPU requests on the target Deployment.
+autoscaling:
+  api:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 3
+    targetCPUUtilizationPercentage: 70
+  frontend:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 3
+    targetCPUUtilizationPercentage: 70

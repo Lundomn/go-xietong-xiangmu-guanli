@@ -1,0 +1,9 @@
+apiVersion: v2
+name: go-xietong
+description: Go 协同项目管理系统的 Kubernetes/Helm 部署包
+type: application
+version: 0.1.0
+appVersion: "2.0.0"
+home: https://github.com/Lundomn/go-xietong-xiangmu-guanli
+maintainers:
+  - name: Lundomn

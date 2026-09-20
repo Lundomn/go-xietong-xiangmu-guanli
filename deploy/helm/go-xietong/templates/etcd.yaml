@@ -1,0 +1,103 @@
+{{- if .Values.etcd.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "go-xietong.etcdServiceName" . }}
+  labels:
+    {{- include "go-xietong.labels" . | nindent 4 }}
+    app.kubernetes.io/component: etcd
+spec:
+  type: ClusterIP
+  ports:
+    - name: client
+      port: {{ .Values.etcd.service.clientPort }}
+      targetPort: client
+    - name: peer
+      port: {{ .Values.etcd.service.peerPort }}
+      targetPort: peer
+  selector:
+    {{- include "go-xietong.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: etcd
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "go-xietong.fullname" . }}-etcd
+  labels:
+    {{- include "go-xietong.labels" . | nindent 4 }}
+    app.kubernetes.io/component: etcd
+spec:
+  serviceName: {{ include "go-xietong.etcdServiceName" . }}
+  replicas: {{ .Values.etcd.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "go-xietong.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: etcd
+  template:
+    metadata:
+      labels:
+        {{- include "go-xietong.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: etcd
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: etcd
+          image: "{{ .Values.images.etcd.repository }}:{{ .Values.images.etcd.tag }}"
+          imagePullPolicy: {{ .Values.images.etcd.pullPolicy }}
+          command: ["/usr/local/bin/etcd"]
+          args:
+            - --name=etcd0
+            - --data-dir=/etcd-data
+            - --advertise-client-urls=http://{{ include "go-xietong.etcdServiceName" . }}:{{ .Values.etcd.service.clientPort }}
+            - --listen-client-urls=http://0.0.0.0:{{ .Values.etcd.service.clientPort }}
+            - --initial-advertise-peer-urls=http://{{ include "go-xietong.etcdServiceName" . }}:{{ .Values.etcd.service.peerPort }}
+            - --listen-peer-urls=http://0.0.0.0:{{ .Values.etcd.service.peerPort }}
+            - --initial-cluster=etcd0=http://{{ include "go-xietong.etcdServiceName" . }}:{{ .Values.etcd.service.peerPort }}
+            - --initial-cluster-state=new
+            - --initial-cluster-token=go-xietong-etcd
+          ports:
+            - name: client
+              containerPort: 2379
+            - name: peer
+              containerPort: 2380
+          readinessProbe:
+            exec:
+              command: ["/usr/local/bin/etcdctl", "endpoint", "health", "--endpoints=http://127.0.0.1:2379"]
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["/usr/local/bin/etcdctl", "endpoint", "health", "--endpoints=http://127.0.0.1:2379"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.etcd.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /etcd-data
+      {{- if not .Values.persistence.etcd.enabled }}
+      volumes:
+        - name: data
+          emptyDir: {}
+      {{- end }}
+  {{- if .Values.persistence.etcd.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "go-xietong.labels" . | nindent 10 }}
+          app.kubernetes.io/component: etcd
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        {{- if .Values.persistence.etcd.storageClass }}
+        storageClassName: {{ .Values.persistence.etcd.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.etcd.size }}
+  {{- end }}
+{{- end }}

@@ -1,0 +1,100 @@
+{{- if .Values.mysql.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "go-xietong.mysqlServiceName" . }}
+  labels:
+    {{- include "go-xietong.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mysql
+spec:
+  type: ClusterIP
+  ports:
+    - name: mysql
+      port: {{ .Values.mysql.service.port }}
+      targetPort: mysql
+  selector:
+    {{- include "go-xietong.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: mysql
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "go-xietong.fullname" . }}-mysql
+  labels:
+    {{- include "go-xietong.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mysql
+spec:
+  serviceName: {{ include "go-xietong.mysqlServiceName" . }}
+  replicas: {{ .Values.mysql.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "go-xietong.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: mysql
+  template:
+    metadata:
+      labels:
+        {{- include "go-xietong.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: mysql
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: mysql
+          image: "{{ .Values.images.mysql.repository }}:{{ .Values.images.mysql.tag }}"
+          imagePullPolicy: {{ .Values.images.mysql.pullPolicy }}
+          ports:
+            - name: mysql
+              containerPort: 3306
+          env:
+            - name: TZ
+              value: Asia/Shanghai
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "go-xietong.secretName" . }}
+                  key: MYSQL_ROOT_PASSWORD
+            - name: MYSQL_DATABASE
+              value: {{ .Values.mysql.database | quote }}
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$MYSQL_ROOT_PASSWORD\" --silent"]
+            initialDelaySeconds: 20
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$MYSQL_ROOT_PASSWORD\" --silent"]
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.mysql.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+      {{- if not .Values.persistence.mysql.enabled }}
+      volumes:
+        - name: data
+          emptyDir: {}
+      {{- end }}
+  {{- if .Values.persistence.mysql.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "go-xietong.labels" . | nindent 10 }}
+          app.kubernetes.io/component: mysql
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        {{- if .Values.persistence.mysql.storageClass }}
+        storageClassName: {{ .Values.persistence.mysql.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.mysql.size }}
+  {{- end }}
+{{- end }}

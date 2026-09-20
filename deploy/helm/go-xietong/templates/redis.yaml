@@ -1,0 +1,101 @@
+{{- if .Values.redis.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "go-xietong.redisServiceName" . }}
+  labels:
+    {{- include "go-xietong.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis
+spec:
+  type: ClusterIP
+  ports:
+    - name: redis
+      port: {{ .Values.redis.service.port }}
+      targetPort: redis
+  selector:
+    {{- include "go-xietong.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: redis
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "go-xietong.fullname" . }}-redis
+  labels:
+    {{- include "go-xietong.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis
+spec:
+  serviceName: {{ include "go-xietong.redisServiceName" . }}
+  replicas: {{ .Values.redis.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "go-xietong.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: redis
+  template:
+    metadata:
+      labels:
+        {{- include "go-xietong.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: redis
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: redis
+          image: "{{ .Values.images.redis.repository }}:{{ .Values.images.redis.tag }}"
+          imagePullPolicy: {{ .Values.images.redis.pullPolicy }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - >-
+              if [ -n "$REDIS_PASSWORD" ]; then
+                exec redis-server --appendonly yes --requirepass "$REDIS_PASSWORD";
+              else
+                exec redis-server --appendonly yes;
+              fi
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "go-xietong.secretName" . }}
+                  key: MS_REDIS_PASSWORD
+          ports:
+            - name: redis
+              containerPort: 6379
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "if [ -n \"$REDIS_PASSWORD\" ]; then redis-cli -a \"$REDIS_PASSWORD\" ping; else redis-cli ping; fi"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "if [ -n \"$REDIS_PASSWORD\" ]; then redis-cli -a \"$REDIS_PASSWORD\" ping; else redis-cli ping; fi"]
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.redis.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      {{- if not .Values.persistence.redis.enabled }}
+      volumes:
+        - name: data
+          emptyDir: {}
+      {{- end }}
+  {{- if .Values.persistence.redis.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "go-xietong.labels" . | nindent 10 }}
+          app.kubernetes.io/component: redis
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        {{- if .Values.persistence.redis.storageClass }}
+        storageClassName: {{ .Values.persistence.redis.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.redis.size }}
+  {{- end }}
+{{- end }}
