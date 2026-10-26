@@ -171,7 +171,7 @@
 </template>
 <script>
     import {mapState} from 'vuex'
-    import moment from "moment";
+
     import VeLine from 'v-charts/lib/line.common'
     import VeHistogram from 'v-charts/lib/histogram.common'
     import ChartCard from '@/components/chart/ChartCard'
@@ -341,7 +341,7 @@
                     this.projectLoading = false;
                 });
             },
-            pageChange(page, pageSize) {
+            pageChange(page) {
                 this.pagination.page = page;
                 this.getProjectList(true);
             }

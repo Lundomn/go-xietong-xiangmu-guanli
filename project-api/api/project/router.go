@@ -37,6 +37,8 @@ func (*RouterProject) Route(r *gin.Engine) {
 	group.POST("/project/_getProjectReport", h.projectReport)
 	group.POST("/project/health", h.projectHealth)
 	group.POST("/report/weekly", h.weeklyReport)
+	group.POST("/report/task-summary", h.taskSummary)
+	group.POST("/mcp", h.mcpEndpoint)
 	t := NewTask()
 	// Attachments are served through an authenticated task-aware handler instead
 	// of exposing the upload directory as a public static filesystem.

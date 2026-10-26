@@ -387,7 +387,7 @@ export default {
                 if (valid) {
                     app.handleOk();
                 } else {
-                    console.log('error submit!!');
+
                     return false;
                 }
             });
@@ -396,7 +396,7 @@ export default {
             let app = this;
             app.submitting = true;
             let obj = {...app.formData};
-            console.log(obj);
+
             // app.$emit('fieldsSave', obj);
             obj.member_list = JSON.stringify(obj.member_list);
             obj.begin_time = moment(obj.begin_time).format('YYYY-MM-DD HH:mm:ss')
@@ -410,7 +410,7 @@ export default {
                 app.actionInfo.modalStatus = false;
             });
         },
-        async rowClick(record, action, index = null) {
+        async rowClick(record, action) {
             let app = this;
             app.formData.id = 0;
             if (action == 'add' || action == 'edit' || action == 'new') {
@@ -459,7 +459,7 @@ export default {
             }
         },
         canRemove(memberCode) {
-            console.log(this.formData.memberList);
+
             if (this.formData.memberList) {
                 const member = this.formData.memberList.find(item => item.member_code == memberCode);
                 if (member && member.is_owner) {

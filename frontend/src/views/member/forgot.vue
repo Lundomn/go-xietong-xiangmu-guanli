@@ -98,7 +98,7 @@
 
 <script>
     import md5 from 'md5'
-    import {forgot} from '@/api/user'
+
     import {checkResponse} from "../../assets/js/utils";
     import {notice} from "../../assets/js/notice";
     import {_getMailCaptcha, _resetPasswordByMail} from "../../api/user";
@@ -158,7 +158,7 @@
 
 
             handleSubmitCaptcha() {
-                this.formCaptcha.validateFields((err, values) => {
+                this.formCaptcha.validateFields((err) => {
                     if (!err) {
                         this.forgotBtn = true;
                         let params = this.formCaptcha.getFieldsValue();
@@ -181,7 +181,7 @@
                 })
             },
             handleSubmit() {
-                this.form.validateFields((err, values) => {
+                this.form.validateFields((err) => {
                     if (!err) {
                         this.hidePasswordLevelChecked = false ;
                         this.registerBtn = true;

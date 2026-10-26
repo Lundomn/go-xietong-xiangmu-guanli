@@ -32,8 +32,8 @@
     import {Table, Button, Divider, Modal, Form, Input, Checkbox} from 'ant-design-vue';
     import EditableCell from '@/components/table/EditableCell';
     import {getNodeList, save, clear} from '@/api/node';
-    import {createRoute, checkResponse} from '@/assets/js/utils';
-    import {getStore} from '@/assets/js/storage';
+
+
 
     const FormItem = Form.Item;
 
@@ -119,8 +119,8 @@
                     save(JSON.stringify(data));
                 }
             },
-            rowClick(record, action) {
-                let app = this;
+            rowClick() {
+
             },
             isChecked(record, key) {
                 //判断子元素是否全选

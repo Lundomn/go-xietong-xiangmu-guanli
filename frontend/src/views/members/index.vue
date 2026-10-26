@@ -494,10 +494,10 @@
                     return
                 }
                 if (info.file.status === 'done') {
-                    console.log(info);
+
                     this.uploadLoading = false;
                     if (checkResponse(info.file.response, true)) {
-                        const count = info.file.response.data;
+
                         notice(`导入成功`, 'message', 'success');
                         this.getMembers();
                     }

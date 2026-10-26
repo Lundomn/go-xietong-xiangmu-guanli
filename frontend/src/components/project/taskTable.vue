@@ -8,7 +8,6 @@
                      :data-source="taskTableData"
                      childrenColumnName="tasks"
                      rowKey="code"
-                     :customRow="rowClick"
                      :defaultExpandAllRows="true"
                      :pagination="false"
                 >
@@ -286,7 +285,7 @@ export default {
                                     v3 = app.formatTask(v3);
                                     if (v3.tasks && v3.tasks.length) {
                                         v3.tasks.forEach((v4)=>{
-                                            v4 = app.formatTask(v4);
+                                            app.formatTask(v4);
                                         })
 
                                     }
@@ -364,18 +363,6 @@ export default {
                 beginTime = '';
             }
             this.editTask(task, {begin_time: beginTime});
-        },
-        rowClick(record, index) {
-            return {
-                on: {
-                    click: (e) => {
-                        console.log(record, index)
-                        if (record.type == 'task') {
-                            const taskId = record.id;
-                        }
-                    }
-                }
-            }
         },
     }
 }

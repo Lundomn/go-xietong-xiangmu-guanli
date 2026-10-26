@@ -2,22 +2,16 @@ package project
 
 import (
 	"context"
+	"encoding/json"
 	"github.com/gin-gonic/gin"
 	"net/http"
 	"strings"
-	"sync"
 	"test.com/project-api/pkg/health"
+	projectmcp "test.com/project-api/pkg/mcp"
 	"test.com/project-api/pkg/report"
 	common "test.com/project-common"
 	"test.com/project-common/errs"
-	"test.com/project-grpc/project"
-	"test.com/project-grpc/task"
 	"time"
-)
-
-const (
-	weeklyReportPageSize = int64(200)
-	weeklyReportMaxTasks = 100
 )
 
 type weeklyReportRequest struct {
@@ -53,32 +47,82 @@ func (p *HandlerProject) weeklyReport(c *gin.Context) {
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
 	defer cancel()
-	memberID := c.GetInt64("memberId")
-	detail, err := ProjectServiceClient.FindProjectDetail(ctx, &project.ProjectRpcMessage{
-		ProjectCode: projectCode,
-		MemberId:    memberID,
+	ctx = withProjectMCPCache(projectmcp.WithCaller(ctx, projectmcp.Caller{
+		MemberID:         c.GetInt64("memberId"),
+		MemberName:       c.GetString("memberName"),
+		OrganizationCode: c.GetString("organizationCode"),
+	}))
+
+	overviewValue, err := projectMCPServer.CallTool(ctx, MCPToolProjectOverview, map[string]any{
+		mcpProjectCodeKey: projectCode,
 	})
 	if err != nil {
-		code, message := errs.ParseGrpcError(err)
-		c.JSON(http.StatusOK, result.Fail(code, message))
+		writeWeeklyMCPError(c, result, err)
 		return
 	}
-	if detail == nil {
-		c.JSON(http.StatusOK, result.Fail(http.StatusBadGateway, "项目服务返回为空"))
+	var overview mcpProjectOverview
+	if err := decodeMCPValue(overviewValue, &overview); err != nil {
+		c.JSON(http.StatusOK, result.Fail(http.StatusBadGateway, "项目概况工具返回格式错误"))
 		return
 	}
 
-	tasks, activities, err := collectWeeklyData(ctx, projectCode, memberID, start, end)
+	taskValue, err := projectMCPServer.CallTool(ctx, MCPToolProjectTasks, map[string]any{
+		mcpProjectCodeKey: projectCode,
+	})
 	if err != nil {
-		code, message := errs.ParseGrpcError(err)
-		c.JSON(http.StatusOK, result.Fail(code, message))
+		writeWeeklyMCPError(c, result, err)
 		return
 	}
-	healthSummary := buildWeeklyHealthSummary(projectCode, detail.Name, detail.EndTime, tasks, activities)
+	var taskOutput mcpTaskListOutput
+	if err := decodeMCPValue(taskValue, &taskOutput); err != nil {
+		c.JSON(http.StatusOK, result.Fail(http.StatusBadGateway, "任务列表工具返回格式错误"))
+		return
+	}
+
+	activityValue, err := projectMCPServer.CallTool(ctx, MCPToolTaskActivities, map[string]any{
+		mcpProjectCodeKey: projectCode,
+		mcpStartDateKey:   start.Format("2006-01-02"),
+		mcpEndDateKey:     end.AddDate(0, 0, -1).Format("2006-01-02"),
+	})
+	if err != nil {
+		writeWeeklyMCPError(c, result, err)
+		return
+	}
+	var activityOutput mcpActivityOutput
+	if err := decodeMCPValue(activityValue, &activityOutput); err != nil {
+		c.JSON(http.StatusOK, result.Fail(http.StatusBadGateway, "任务动态工具返回格式错误"))
+		return
+	}
+
+	healthValue, err := projectMCPServer.CallTool(ctx, MCPToolProjectHealth, map[string]any{
+		mcpProjectCodeKey: projectCode,
+	})
+	if err != nil {
+		writeWeeklyMCPError(c, result, err)
+		return
+	}
+	var healthSnapshot health.Snapshot
+	if err := decodeMCPValue(healthValue, &healthSnapshot); err != nil {
+		c.JSON(http.StatusOK, result.Fail(http.StatusBadGateway, "项目健康度工具返回格式错误"))
+		return
+	}
+
+	// Risk evidence is a separate tool even though it shares the cached health
+	// snapshot. This makes the model context explicit and auditable.
+	riskValue, riskErr := projectMCPServer.CallTool(ctx, MCPToolRiskEvidence, map[string]any{
+		mcpProjectCodeKey: projectCode,
+	})
+	riskEvidence := mcpRiskEvidenceOutput{}
+	if riskErr == nil {
+		_ = decodeMCPValue(riskValue, &riskEvidence)
+	}
+	healthSummary := reportHealthSummary(healthSnapshot, riskEvidence)
+	tasks := reportTasksFromMCP(taskOutput.Tasks)
+	activities := reportActivitiesFromMCP(activityOutput.Activities)
 
 	generated := report.NewGenerator().Generate(ctx, report.Input{
 		ProjectCode: projectCode,
-		ProjectName: detail.Name,
+		ProjectName: overview.Name,
 		Start:       start,
 		End:         end,
 		Focus:       strings.TrimSpace(req.Focus),
@@ -86,188 +130,78 @@ func (p *HandlerProject) weeklyReport(c *gin.Context) {
 		Activities:  activities,
 		Health:      healthSummary,
 	})
+	generated.Orchestrator = "project-api/mcp"
+	generated.MCPTools = append([]string{}, weeklyReportMCPTools...)
 	c.JSON(http.StatusOK, result.Success(generated))
 }
 
-func collectWeeklyData(ctx context.Context, projectCode string, memberID int64, start, end time.Time) ([]report.Task, []report.Activity, error) {
-	stages, err := TaskServiceClient.TaskStages(ctx, &task.TaskReqMessage{
-		ProjectCode: projectCode,
-		Page:        1,
-		PageSize:    weeklyReportPageSize,
-		MemberId:    memberID,
-	})
+func decodeMCPValue(value any, target any) error {
+	encoded, err := json.Marshal(value)
 	if err != nil {
-		return nil, nil, err
+		return err
 	}
-	if stages == nil {
-		return []report.Task{}, []report.Activity{}, nil
-	}
-
-	allTasks := make([]*task.TaskMessage, 0)
-	seen := make(map[string]struct{})
-	for _, stage := range stages.List {
-		if stage == nil || stage.Code == "" {
-			continue
-		}
-		stageTasks, callErr := TaskServiceClient.TaskList(ctx, &task.TaskReqMessage{
-			StageCode: stage.Code,
-			MemberId:  memberID,
-		})
-		if callErr != nil {
-			return nil, nil, callErr
-		}
-		if stageTasks == nil {
-			continue
-		}
-		for _, item := range stageTasks.List {
-			if item == nil {
-				continue
-			}
-			key := item.Code
-			if key == "" {
-				key = item.Name + ":" + item.CreateTime
-			}
-			if _, exists := seen[key]; exists {
-				continue
-			}
-			seen[key] = struct{}{}
-			allTasks = append(allTasks, item)
-		}
-	}
-
-	reportTasks := make([]report.Task, 0, len(allTasks))
-	for _, item := range allTasks {
-		assignee := ""
-		if item.Executor != nil {
-			assignee = item.Executor.Name
-		}
-		reportTasks = append(reportTasks, report.Task{
-			ID:          item.Code,
-			Name:        item.Name,
-			Description: item.Description,
-			Assignee:    assignee,
-			CreatedAt:   item.CreateTime,
-			EndAt:       item.EndTime,
-			Priority:    int(item.Pri),
-			Done:        item.Done == 1 || strings.EqualFold(item.ExecuteStatus, "done"),
-		})
-	}
-
-	activities, err := collectTaskActivities(ctx, allTasks, memberID, start, end)
-	if err != nil {
-		return nil, nil, err
-	}
-	return reportTasks, activities, nil
+	return json.Unmarshal(encoded, target)
 }
 
-func buildWeeklyHealthSummary(projectCode, projectName, projectEnd string, tasks []report.Task, activities []report.Activity) *report.HealthSummary {
-	healthTasks := make([]health.Task, 0, len(tasks))
-	for _, item := range tasks {
-		healthTasks = append(healthTasks, health.Task{
-			ID:        item.ID,
-			Name:      item.Name,
-			Assignee:  item.Assignee,
-			CreatedAt: item.CreatedAt,
-			EndAt:     item.EndAt,
-			Priority:  item.Priority,
-			Done:      item.Done,
+func writeWeeklyMCPError(c *gin.Context, result *common.Result, err error) {
+	if grpcCode, message := errs.ParseGrpcError(err); grpcCode != 0 && message != "" {
+		c.JSON(http.StatusOK, result.Fail(grpcCode, message))
+		return
+	}
+	c.JSON(http.StatusOK, result.Fail(http.StatusBadGateway, err.Error()))
+}
+
+func reportTasksFromMCP(items []mcpProjectTask) []report.Task {
+	result := make([]report.Task, 0, len(items))
+	for _, item := range items {
+		result = append(result, report.Task{
+			ID:          item.ID,
+			Name:        item.Name,
+			Description: item.Description,
+			Assignee:    item.Assignee,
+			CreatedAt:   item.CreatedAt,
+			EndAt:       item.EndAt,
+			Priority:    item.Priority,
+			Done:        item.Done,
 		})
 	}
-	healthActivities := make([]health.Activity, 0, len(activities))
-	for _, item := range activities {
-		healthActivities = append(healthActivities, health.Activity{At: item.At})
+	return result
+}
+
+func reportActivitiesFromMCP(items []mcpTaskActivity) []report.Activity {
+	result := make([]report.Activity, 0, len(items))
+	for _, item := range items {
+		result = append(result, report.Activity{
+			TaskName: item.TaskName,
+			Content:  item.Content,
+			Remark:   item.Remark,
+			Actor:    item.Actor,
+			At:       item.At,
+		})
 	}
-	snapshot := health.Analyze(health.Input{
-		ProjectCode: projectCode,
-		ProjectName: projectName,
-		Tasks:       healthTasks,
-		Activities:  healthActivities,
-		ProjectEnd:  projectHealthDate(projectEnd),
-		Now:         time.Now(),
-	})
-	evidence := make([]string, 0, len(snapshot.Evidence))
-	for _, item := range snapshot.Evidence {
-		evidence = append(evidence, item.Title+"："+item.Detail)
+	return result
+}
+
+func reportHealthSummary(snapshot health.Snapshot, risk mcpRiskEvidenceOutput) *report.HealthSummary {
+	evidence := risk.Evidence
+	suggestions := risk.Suggestions
+	if len(evidence) == 0 {
+		evidence = snapshot.Evidence
+	}
+	if len(suggestions) == 0 {
+		suggestions = snapshot.Suggestions
+	}
+	evidenceText := make([]string, 0, len(evidence))
+	for _, item := range evidence {
+		evidenceText = append(evidenceText, item.Title+"："+item.Detail)
 	}
 	return &report.HealthSummary{
 		Score:       snapshot.Score,
 		Level:       snapshot.Level,
 		LevelCode:   snapshot.LevelCode,
-		Evidence:    evidence,
-		Suggestions: snapshot.Suggestions,
+		Evidence:    evidenceText,
+		Suggestions: suggestions,
 	}
-}
-
-type taskLogResult struct {
-	taskName string
-	logs     []*task.TaskLog
-	err      error
-}
-
-func collectTaskActivities(ctx context.Context, tasks []*task.TaskMessage, memberID int64, start, end time.Time) ([]report.Activity, error) {
-	if len(tasks) == 0 {
-		return []report.Activity{}, nil
-	}
-	limit := len(tasks)
-	if limit > weeklyReportMaxTasks {
-		limit = weeklyReportMaxTasks
-	}
-	results := make(chan taskLogResult, limit)
-	semaphore := make(chan struct{}, 8)
-	var waitGroup sync.WaitGroup
-	for _, item := range tasks[:limit] {
-		if item == nil || item.Code == "" {
-			continue
-		}
-		waitGroup.Add(1)
-		go func(current *task.TaskMessage) {
-			defer waitGroup.Done()
-			semaphore <- struct{}{}
-			defer func() { <-semaphore }()
-			response, err := TaskServiceClient.TaskLog(ctx, &task.TaskReqMessage{
-				TaskCode: current.Code,
-				All:      1,
-				MemberId: memberID,
-			})
-			if err != nil {
-				results <- taskLogResult{taskName: current.Name, err: err}
-				return
-			}
-			if response == nil {
-				results <- taskLogResult{taskName: current.Name, logs: []*task.TaskLog{}}
-				return
-			}
-			results <- taskLogResult{taskName: current.Name, logs: response.List}
-		}(item)
-	}
-	go func() {
-		waitGroup.Wait()
-		close(results)
-	}()
-
-	activities := make([]report.Activity, 0)
-	for batch := range results {
-		if batch.err != nil {
-			return nil, batch.err
-		}
-		for _, item := range batch.logs {
-			if item == nil || !report.InPeriod(item.CreateTime, start, end) {
-				continue
-			}
-			actor := ""
-			if item.Member != nil {
-				actor = item.Member.Name
-			}
-			activities = append(activities, report.Activity{
-				TaskName: batch.taskName,
-				Content:  item.Content,
-				Remark:   item.Remark,
-				Actor:    actor,
-				At:       item.CreateTime,
-			})
-		}
-	}
-	return activities, nil
 }
 
 func firstNonEmpty(values ...string) string {

@@ -74,8 +74,9 @@
 <script>
     import {checkResponse} from "../../assets/js/utils";
     import {list, del} from "../../api/taskTag";
+    import {del as delFile} from "../../api/file";
     import pagination from "../../mixins/pagination";
-    import {formatTaskTime, relativelyTaskTime} from "../../assets/js/dateTime";
+    import {formatTaskTime} from "../../assets/js/dateTime";
     import {getListByTaskTag} from "../../api/task";
     import moment from "moment";
 
@@ -105,7 +106,7 @@
             code() {
                 this.init();
             },
-            tabKey(val) {
+            tabKey() {
                 this.getTaskList();
             }
 

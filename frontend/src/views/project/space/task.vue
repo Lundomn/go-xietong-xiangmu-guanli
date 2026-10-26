@@ -570,8 +570,7 @@
         >
             <task-search :project-code="code" @search="taskSearchAction"></task-search>
         </a-drawer>
-        <invite-project-member v-if="false" v-model="showInviteMember" :project-code="code"
-                               v-if="showInviteMember"></invite-project-member>
+        <invite-project-member v-if="false" v-model="showInviteMember" :project-code="code"></invite-project-member>
     </div>
 </template>
 
@@ -763,7 +762,7 @@
                 }
             },
             viewRefresh() {
-                console.log('viewRefresh');
+
                 // this.getTaskStages(false);
             },
             inviteMemberDraw: {
@@ -805,7 +804,7 @@
             dragscroll2: function (el) {
             // el.oncontextmenu = function (ev) {
             el.onmousedown = function (ev) {
-                console.log(ev.target.classList);
+
                 const exclude = [
                 "task-content",
                 "task-content-set",
@@ -837,7 +836,7 @@
                 const originalScrollBehavior = el.style["scroll-behavior"];
                 const originalPointerEvents = el.style["pointer-events"];
                 el.style["scroll-behavior"] = "auto";
-                let elEvent = ev;
+
                 // 鼠标移动事件是监听的整个document，这样可以使鼠标能够在元素外部移动的时候也能实现拖动
                 document.onmousemove = function (ev) {
                 ev.stopPropagation();
@@ -901,8 +900,7 @@
                         this.taskStages = taskStages = res.data.list;
                     }
                     if (taskStages) {
-                        let searchParams = app.taskSearchParams;
-                        let params = {};
+
                         taskStages.forEach((v, k) => {
                             v.page = 1;
                             app.getTasks(v, k, showLoading);
@@ -960,7 +958,7 @@
                 return tasks.filter(item => item.done == done);
             },
             taskSearchAction(value) {
-                console.log(value);
+
                 this.taskSearchParams = value;
                 this.getTaskStages();
             },
@@ -1282,7 +1280,7 @@
             },
             taskSort(event) {
                 const list = this.getPreAndNextCode(event);
-                console.log(list);
+
                 const toStageCode = event.to.parentNode.parentNode.parentNode.getAttribute('id');
                 sortTask({preTaskCode: list[0], nextTaskCode: list[1], toStageCode: toStageCode});
             },
@@ -1373,7 +1371,7 @@
                     return
                 }
                 if (info.file.status === 'done') {
-                    console.log(info);
+
                     this.uploadLoading = false;
                     if (checkResponse(info.file.response, true)) {
                         const count = info.file.response.data;

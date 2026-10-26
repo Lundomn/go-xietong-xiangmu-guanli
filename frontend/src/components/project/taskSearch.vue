@@ -258,11 +258,11 @@
     </div>
 </template>
 <script>
-    import _ from 'lodash'
+
     import moment from 'moment';
     import {list as getProjectMember} from "../../api/projectMember";
     import {_getAll as getTaskStage} from "../../api/taskStages";
-    import {notice} from "../../assets/js/notice";
+
     import {COMMON} from "../../const/common";
 
     export default {
@@ -318,14 +318,14 @@
                 this.form.resetFields();
             },
             handleSubmit() {
-                this.form.validateFields((err, values) => {
+                this.form.validateFields((err) => {
                     if (!err) {
                         let params = this.form.getFieldsValue();
                         params.executor = JSON.stringify(params.executor);
                         params.creator = JSON.stringify(params.creator);
                         params.joiner = JSON.stringify(params.joiner);
                         params.status = JSON.stringify(params.status);
-                        console.log(params);
+
                         if (params.end_time && params.end_time.length) {
                             params.endTime = JSON.stringify([moment(params.end_time[0]).format('YYYY-MM-DD'), moment(params.end_time[1]).format('YYYY-MM-DD')]);
                         } else {
@@ -346,7 +346,7 @@
                         } else {
                             params.doneTime = undefined;
                         }
-                        console.log(params);
+
                         this.$emit('search', params)
                     }
                 })

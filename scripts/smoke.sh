@@ -27,6 +27,15 @@ post_form() {
     -X POST "${BASE_URL}${endpoint}" "$@"
 }
 
+post_json() {
+  local endpoint="$1"
+  shift
+  curl -sS --retry 3 --retry-all-errors --max-time "${CURL_TIMEOUT}" \
+    -X POST "${BASE_URL}${endpoint}" \
+    -H "Content-Type: application/json" \
+    -H "Accept: application/json, text/event-stream" "$@"
+}
+
 assert_success() {
   local response="$1"
   local step="$2"
@@ -51,16 +60,16 @@ extract_required() {
   printf '%s' "${value}"
 }
 
-echo "[1/11] API health"
+echo "[1/13] API health"
 health_response="$(curl -fsS --retry 3 --retry-all-errors --max-time "${CURL_TIMEOUT}" "${BASE_URL}/health")"
 jq -e '.status == "ok"' >/dev/null <<<"${health_response}"
 
 if [[ -n "${FRONTEND_URL}" ]]; then
-  echo "[2/11] Frontend health"
+  echo "[2/13] Frontend health"
   frontend_health="$(curl -fsS --retry 3 --retry-all-errors --max-time "${CURL_TIMEOUT}" "${FRONTEND_URL%/}/health")"
   jq -e '.status == "ok"' >/dev/null <<<"${frontend_health}"
 else
-  echo "[2/11] Frontend health skipped (set SMOKE_FRONTEND_URL to enable)"
+  echo "[2/13] Frontend health skipped (set SMOKE_FRONTEND_URL to enable)"
 fi
 
 seed="${SMOKE_SEED:-$(date +%s)}"
@@ -69,7 +78,7 @@ account="${SMOKE_ACCOUNT:-smoke${seed}}"
 email="${SMOKE_EMAIL:-${account}@example.com}"
 password="${SMOKE_PASSWORD:-SmokePass!123}"
 
-echo "[3/11] Captcha and registration"
+echo "[3/13] Captcha and registration"
 captcha_response="$(post_form /project/login/getCaptcha --data-urlencode "mobile=${mobile}")"
 assert_success "${captcha_response}" "captcha"
 captcha="$(extract_required "${captcha_response}" '.data' "captcha")"
@@ -83,7 +92,7 @@ register_response="$(post_form /project/login/register \
   --data-urlencode "captcha=${captcha}")"
 assert_success "${register_response}" "registration"
 
-echo "[4/11] Login"
+echo "[4/13] Login"
 login_response="$(post_form /project/login \
   --data-urlencode "account=${account}" \
   --data-urlencode "password=${password}")"
@@ -91,7 +100,7 @@ assert_success "${login_response}" "login"
 access_token="$(extract_required "${login_response}" '.data.tokenList.accessToken' "access token")"
 auth_header=( -H "Authorization: Bearer ${access_token}" )
 
-echo "[5/11] Project template and project creation"
+echo "[5/13] Project template and project creation"
 template_response="$(post_form /project/project_template "${auth_header[@]}" \
   --data-urlencode "viewType=1" \
   --data-urlencode "page=1" \
@@ -106,7 +115,7 @@ project_response="$(post_form /project/project/save "${auth_header[@]}" \
 assert_success "${project_response}" "project creation"
 project_code="$(extract_required "${project_response}" '.data.code' "project code")"
 
-echo "[6/11] Task stage and task creation"
+echo "[6/13] Task stage and task creation"
 stages_response="$(post_form /project/task_stages "${auth_header[@]}" \
   --data-urlencode "projectCode=${project_code}" \
   --data-urlencode "page=1" \
@@ -121,7 +130,7 @@ task_response="$(post_form /project/task/save "${auth_header[@]}" \
 assert_success "${task_response}" "task creation"
 task_code="$(extract_required "${task_response}" '.data.code' "task code")"
 
-echo "[7/11] Single-part upload and authenticated download"
+echo "[7/13] Single-part upload and authenticated download"
 upload_file="${tmp_dir}/smoke.txt"
 download_file="${tmp_dir}/downloaded.txt"
 printf 'go-xietong smoke upload %s\n' "${seed}" >"${upload_file}"
@@ -146,7 +155,7 @@ if jq -e '.code == 200' >/dev/null <<<"${unauthorized_download}"; then
   exit 1
 fi
 
-echo "[8/11] Out-of-order chunk upload"
+echo "[8/13] Out-of-order chunk upload"
 chunk_one="${tmp_dir}/chunk-one.txt"
 chunk_two="${tmp_dir}/chunk-two.txt"
 chunked_download="${tmp_dir}/chunked-download.txt"
@@ -188,24 +197,44 @@ curl -fsS --retry 3 --retry-all-errors --max-time "${CURL_TIMEOUT}" \
 cat "${chunk_one}" "${chunk_two}" >"${tmp_dir}/chunked-expected.txt"
 cmp -s "${tmp_dir}/chunked-expected.txt" "${chunked_download}"
 
-echo "[9/11] Project health radar"
+echo "[9/13] Project health radar"
 health_radar_response="$(post_form /project/project/health "${auth_header[@]}" \
   --data-urlencode "projectCode=${project_code}")"
 assert_success "${health_radar_response}" "project health radar"
 jq -e '.data.score >= 0 and .data.score <= 100 and (.data.method == "rules")' >/dev/null <<<"${health_radar_response}"
 
-echo "[10/11] Weekly report"
+echo "[10/13] MCP tool discovery and risk evidence"
+mcp_tools_response="$(post_json /project/mcp "${auth_header[@]}" \
+  --data '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')"
+jq -e '.result.tools | map(.name) | (["get_project_overview", "get_project_tasks", "get_task_activities", "get_project_health", "get_project_risk_evidence"] - .) | length == 0' \
+  >/dev/null <<<"${mcp_tools_response}"
+mcp_risk_response="$(post_json /project/mcp "${auth_header[@]}" \
+  --data "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"get_project_risk_evidence\",\"arguments\":{\"project_code\":\"${project_code}\"}}}")"
+jq -e --arg project_code "${project_code}" \
+  '.result.isError != true and .result.structuredContent.project_code == $project_code' \
+  >/dev/null <<<"${mcp_risk_response}"
+
+echo "[11/13] Task summary"
+task_summary_response="$(post_form /project/report/task-summary "${auth_header[@]}" \
+  --data-urlencode "projectCode=${project_code}" \
+  --data-urlencode "taskCode=${task_code}")"
+assert_success "${task_summary_response}" "task summary"
+jq -e --arg task_code "${task_code}" \
+  '.data.task.id == $task_code and .data.markdown != null and (.data.mcp_tools | length) >= 3' \
+  >/dev/null <<<"${task_summary_response}"
+
+echo "[12/13] Weekly report"
 report_response="$(post_form /project/report/weekly "${auth_header[@]}" \
   --data-urlencode "projectCode=${project_code}" \
   --data-urlencode "focus=验证交付风险和下一步计划")"
 assert_success "${report_response}" "weekly report"
 jq -e '.data.markdown != null and (.data.generated_by == "local" or .data.generated_by == "local-fallback" or .data.generated_by == "ai")' >/dev/null <<<"${report_response}"
 
-echo "[11/11] Authenticated project list"
+echo "[13/13] Authenticated project list"
 project_list_response="$(post_form /project/project "${auth_header[@]}" \
   --data-urlencode "page=1" \
   --data-urlencode "pageSize=10")"
 assert_success "${project_list_response}" "project list"
 jq -e '.data.list != null and .data.total >= 1' >/dev/null <<<"${project_list_response}"
 
-echo "Smoke Test passed: registration, login, project, task, upload/download, health radar and weekly report"
+echo "Smoke Test passed: registration, login, project, task, upload/download, MCP tools, task summary, health radar and weekly report"

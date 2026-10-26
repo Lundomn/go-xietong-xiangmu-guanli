@@ -152,7 +152,7 @@
                         okType: 'danger',
                         cancelText: '取消',
                         onOk() {
-                            del(record.id).then(res => {
+                            del(record.id).then(() => {
                                 app.init();
                             });
                             return Promise.resolve();
@@ -164,7 +164,7 @@
             handleSearchSubmit() {
                 let app = this;
                 app.searchForm.validateFields(
-                    (err, values) => {
+                    (err) => {
                         if (!err) {
                             app.search();
                         }

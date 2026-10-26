@@ -461,7 +461,7 @@
                 app.projectVersion.info = null;
                 app.projectVersion.modalTitle = '创建版本';
             },
-            changeVersionStatus(e, versionType, version, index) {
+            changeVersionStatus(e, versionType, version) {
                 let app = this;
                 if (e.key == version.code) {
                     return false;
@@ -487,7 +487,7 @@
                     });
 
                 } else {
-                    changeStatus({versionCode: version.code, status: e.key}).then(res => {
+                    changeStatus({versionCode: version.code, status: e.key}).then(() => {
                         this.getProjectVersionList();
                     });
                 }
@@ -512,7 +512,7 @@
                                 versionCode: this.publishVersion.info.code,
                                 status: this.publishVersion.status,
                                 publishTime: obj.publishTime,
-                            }).then(res => {
+                            }).then(() => {
                                 app.publishVersion.modalStatus = false;
                                 app.getProjectVersionList();
                             });

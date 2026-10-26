@@ -57,7 +57,6 @@
                         theme = 'light';
                     }
                     this.$store.dispatch('setTheme', theme);
-                } else {
                 }
             },
         }

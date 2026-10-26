@@ -120,7 +120,7 @@
     import {notice} from "../../../assets/js/notice";
     import {showMsgNotification} from "../../../assets/js/notify";
     import {selfList} from "../../../api/task";
-    import {relativelyTime} from "../../../assets/js/dateTime";
+
 
     export default {
         name: 'HeaderNotice',
@@ -153,7 +153,7 @@
                 } else if (val.action === 'task' || val.action === 'events') {
                     this.init();
                     const permission = showMsgNotification(val.title, val.msg, {icon: val.data.notify.avatar});
-                    console.log(permission);
+
                     if (permission === false) {
                         notice(val, 'notice', 'info', 10);
                     }

@@ -20,7 +20,7 @@
 </template>
 
 <script>
-    import _ from 'lodash'
+
     import {doData, read} from "../../api/department";
     import {checkResponse} from "../../assets/js/utils";
     import {notice} from "../../assets/js/notice";

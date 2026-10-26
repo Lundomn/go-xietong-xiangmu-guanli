@@ -12,8 +12,14 @@
 
 # Runtime data
 logs/
+!project-common/logs/
+!project-common/logs/*.go
 **/upload/*
 !deploy/upload/.keep
+
+# Local document and verification artifacts
+/tmp/
+/output/
 
 # Editor and operating-system files
 .DS_Store

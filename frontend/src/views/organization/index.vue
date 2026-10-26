@@ -74,7 +74,7 @@
 </template>
 <script>
     import {mapState} from 'vuex'
-    import {list, doData, del} from '@/api/organization';
+    import {list, doData} from '@/api/organization';
     import {checkResponse} from '@/assets/js/utils';
     import pagination from "@/mixins/pagination";
     import moment from 'moment';
@@ -182,7 +182,7 @@
             handleSubmit() {
                 let app = this;
                 app.form.validateFields(
-                    (err, values) => {
+                    (err) => {
                         if (!err) {
                             app.handleOk();
                         }
@@ -193,7 +193,7 @@
                 app.actionInfo.confirmLoading = true;
                 let obj = app.form.getFieldsValue();
                 obj.areas = JSON.stringify(obj.areas);
-                console.log(app.newData);
+
                 if (app.newData.code) {
                     app.newData.organizationCode = app.newData.code
                     //编辑

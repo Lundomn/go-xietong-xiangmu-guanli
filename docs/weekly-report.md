@@ -17,7 +17,15 @@ Content-Type: application/json
 }
 ```
 
-`startDate` 和 `endDate` 可省略，默认生成当前周一至周日的周报；时间跨度最长 31 天。接口会汇总项目任务、完成状态、负责人、截止时间和任务动态，并返回完成率、亮点、风险、下周建议和 Markdown 正文。
+`startDate` 和 `endDate` 可省略，默认生成当前周一至周日的周报；时间跨度最长 31 天。接口会汇总项目任务、完成状态、负责人、截止时间和任务动态，并返回完成率、亮点、风险、下周建议和 Markdown 正文。请求会先经过 `project-api` 的 MCP 工具编排层，返回值中的 `mcp_tools` 可用于核对事实来源。
+
+任务详情页还提供同一链路的任务总结接口：
+
+```text
+POST /project/report/task-summary
+```
+
+请求至少需要 `projectCode` 和 `taskCode`，可选传入 `startDate`、`endDate` 和 `focus`。详细的 MCP 工具协议见 [`mcp-ai.md`](mcp-ai.md)。
 
 ## AI 模式
 

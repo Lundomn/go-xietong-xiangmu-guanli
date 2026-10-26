@@ -217,7 +217,7 @@
                     return
                 }
                 if (info.file.status === 'done') {
-                    getBase64(info.file.originFileObj, (imageUrl) => {
+                    getBase64(info.file.originFileObj, () => {
                         this.cover = info.file.response.data.url;
                         this.uploadLoading = false;
                     })

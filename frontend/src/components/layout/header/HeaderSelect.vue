@@ -21,7 +21,7 @@
     import {mapState} from 'vuex'
     import {changeCurrentOrganization} from '@/api/user';
     import {checkResponse} from "@/assets/js/utils";
-    import {createRoute} from "../../../assets/js/utils";
+
 
     export default {
         name: 'HeaderSelect',
@@ -42,7 +42,7 @@
                     if (checkResponse(res)) {
                         app.$router.replace('/home/' + app.organizationList[action.key].code);
                     }
-                    console.log(res);
+
                 })
             },
         }

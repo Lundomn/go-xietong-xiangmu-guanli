@@ -112,7 +112,6 @@ const router = new Router({
 });
 
 router.beforeEach((to, from, next) => {
-    console.log(to);
     let tokenList = getStore('tokenList', true);
     if (tokenList) {
         let refreshToken = tokenList.refreshToken;
@@ -153,7 +152,7 @@ router.beforeEach((to, from, next) => {
     }
     next();
 });
-router.afterEach(route => {
+router.afterEach(() => {
     //预留
     // window.scrollTo(0,0)
 });

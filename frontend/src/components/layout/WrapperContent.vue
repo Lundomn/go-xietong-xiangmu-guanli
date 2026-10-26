@@ -130,6 +130,7 @@
                 }
             },
             wrapper_content_class: function () {
+                return '';
             }
         },
         destroyed: function () {

@@ -11,7 +11,7 @@
 - 任务动态、评论、工时记录
 - 附件上传、乱序分片合并和鉴权下载
 - 腾讯云短信验证码生产适配，本地支持演示模式
-- 中文本地周报生成，可选接入 OpenAI-compatible 模型
+- MCP 驱动的 AI 周报和任务总结：工具事实可追溯，模型不可用时自动回退本地规则
 - 项目健康度与风险雷达：规则评分、证据解释和可执行建议，AI 不可用时仍可运行
 - Vue 2 + Ant Design Vue 中文工作台，支持项目、任务、附件和 AI 周报操作
 - k6 可重复压测、ApacheBench 基线和可选 pprof 性能排查
@@ -26,21 +26,21 @@
    ▼
 frontend (Nginx) ──反向代理──> project-api :8088
                                   │
-                                  ▼
-客户端/脚本 ─────HTTP :8088────── project-api
-   ▼
+                                  ├── AI 编排层
+                                  │     └── MCP 工具层 ──> 项目/任务 gRPC
+                                  │                         └── 健康度规则引擎
+                                  └── 可选模型服务；失败回退本地规则
 project-api ──gRPC/etcd──> project-user :8881
      │                     project-project :8882
      ├── MySQL
-     ├── Redis
-     └── 可选 OpenAI-compatible AI 服务
+     └── Redis
 ```
 
 目录说明：
 
 ```text
 frontend          Vue 2 工作台、路由、鉴权、上传和 AI 周报交互
-project-api       HTTP 网关、鉴权中间件、文件下载、AI 周报
+project-api       HTTP 网关、鉴权中间件、MCP 工具、AI 编排、文件下载
 project-user      用户、组织、验证码和 JWT 服务
 project-project   项目、任务、工时、评论和附件元数据服务
 project-grpc      gRPC 协议生成代码
@@ -52,7 +52,7 @@ docs              功能说明
 
 ## 快速启动
 
-需要安装 Docker、Docker Compose 和 Go 1.18 或更高版本。
+需要安装 Docker、Docker Compose 和 Go 1.23 或更高版本。
 
 ```bash
 cp .env.example .env
@@ -133,7 +133,9 @@ POST /project/project
 POST /project/task_stages
 POST /project/task/save
 POST /project/report/weekly
+POST /project/report/task-summary
 POST /project/project/health
+POST /project/mcp
 POST /project/project/_projectStats
 POST /project/project/_getProjectReport
 POST /project/task/taskDone
@@ -142,7 +144,7 @@ POST /project/task/dateTotalForProject
 
 验证码默认不会通过 HTTP 返回。没有短信服务的本地演示环境可在 `.env` 中设置 `MS_CAPTCHA_EXPOSE_CODE=1`；生产环境保持为 `0`，并配置腾讯云短信变量。完整步骤见 [`docs/cloud-services.md`](docs/cloud-services.md)。
 
-## AI 周报
+## MCP + AI 周报/任务总结
 
 接口：
 
@@ -161,7 +163,17 @@ POST /project/report/weekly
 }
 ```
 
-默认使用本地规则生成器，即使没有外部 AI 也能返回任务统计、进展、风险和下周建议。接入 OpenAI-compatible 服务时配置：
+前端的一键周报和任务总结都会经过 `project-api` 的 AI 编排层。编排层先通过 MCP 工具取得项目概况、任务、动态、健康度和风险证据，再交给可选模型生成；没有模型、模型超时或返回异常时自动使用本地规则生成。
+
+MCP 工具入口为：
+
+```text
+POST /project/mcp
+```
+
+具体的 JSON-RPC 调用、工具定义和安全边界见 [`docs/mcp-ai.md`](docs/mcp-ai.md)。项目使用官方 [Go MCP SDK](https://github.com/modelcontextprotocol/go-sdk)。
+
+当前模型配置仍保持可选，未配置也不影响本地周报和任务总结：
 
 ```dotenv
 MS_AI_PROVIDER=openai-compatible
@@ -170,7 +182,7 @@ MS_AI_API_KEY=your-key
 MS_AI_MODEL=your-model
 ```
 
-外部模型只在明确配置后启用；请求失败会自动降级为本地周报。项目名称、任务和动态会发送给配置的模型服务，请根据数据合规要求选择供应商。
+外部模型只在明确配置后启用；请求失败会自动降级为本地生成。项目名称、任务、动态和风险证据会发送给配置的模型服务，请根据数据合规要求选择供应商。
 
 ## 项目健康度与风险雷达
 
@@ -214,9 +226,9 @@ SMOKE_FRONTEND_URL=http://127.0.0.1:8080 \
 ./scripts/smoke.sh
 ```
 
-Smoke Test 会真实走过健康检查、注册、登录、创建项目、创建任务、单文件上传、乱序分片合并与鉴权下载、项目健康度、AI 周报和项目列表，并在数据库中创建一组带有 `smoke` 前缀的验收数据。验证码明文返回只允许在隔离的本地/CI 环境开启，生产环境必须关闭并接入短信服务。
+Smoke Test 会真实走过健康检查、注册、登录、创建项目、创建任务、单文件上传、乱序分片合并与鉴权下载、MCP 工具发现与风险证据、AI 任务总结、项目健康度、AI 周报和项目列表，并在数据库中创建一组带有 `smoke` 前缀的验收数据。验证码明文返回只允许在隔离的本地/CI 环境开启，生产环境必须关闭并接入短信服务。
 
-GitHub Actions 会自动执行 Go 测试、`go vet`、竞态测试、前端构建、Helm 模板校验和 Docker Compose 全链路 Smoke Test。
+GitHub Actions 会自动执行 Go 测试、`go vet`、竞态测试、前端 lint、组件回归测试和生产构建、Helm 模板校验，以及 Docker Compose 全链路 Smoke Test。
 
 ```bash
 export GOPROXY=https://goproxy.cn,direct
@@ -228,13 +240,16 @@ for module in project-common project-user project-api project-project; do
 done
 ```
 
-AI 周报的本地生成、远程模型成功和远程失败降级均有单元测试；部署验收通过 Smoke Test 覆盖注册、登录、项目、任务、附件下载、项目健康度和周报主链路。
+单元测试覆盖 MCP 调用身份与任务筛选、请求级缓存隔离，以及模型调用失败、取消、空响应、错误 JSON 和超大响应时的本地回退。前端回归测试验证任务总结的成功、失败重试、重复点击和切换任务后忽略旧响应。
 
 前端构建检查：
 
 ```bash
 cd frontend
-npm run build
+npm ci --legacy-peer-deps
+npm run lint
+npm test
+NODE_OPTIONS=--openssl-legacy-provider npm run build
 ```
 
 ## License

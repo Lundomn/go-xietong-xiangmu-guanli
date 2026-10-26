@@ -89,7 +89,7 @@
             code() {
                 this.init();
             },
-            tabKey(val) {
+            tabKey() {
                 this.init();
             }
 

@@ -210,7 +210,7 @@
         },
         watch: {
             uploader: {
-                handler(newVal, oldVal) {
+                handler(newVal) {
                     //监听是否有上传文件行为
                     if (!newVal || !newVal.fileList) {
                         return;

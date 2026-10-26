@@ -24,7 +24,7 @@ func Run(r *gin.Engine, srvName string, addr string, stop func()) {
 		}
 	}()
 
-	quit := make(chan os.Signal)
+	quit := make(chan os.Signal, 1)
 	//SIGINT 用户发送INTR字符(Ctrl+C)触发 kill -2
 	//SIGTERM 结束程序(可以被捕获、阻塞或忽略)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)

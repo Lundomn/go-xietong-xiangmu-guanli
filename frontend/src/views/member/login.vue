@@ -127,7 +127,7 @@
     import {mapActions} from 'vuex'
     import {mapState} from 'vuex'
     import {Login, getCaptcha} from '@/api/user'
-    import {info} from '@/api/system';
+
     import config from "@/config/config";
     import {checkResponse, createRoute, timeFix} from '@/assets/js/utils'
     import {getStore} from '@/assets/js/storage'
@@ -248,7 +248,7 @@
                             }
                         }, 1000);
 
-                        const hide = this.$message.loading('验证码发送中..', 0);
+                        this.$message.loading('验证码发送中..', 0);
                         getCaptcha(values.mobile)
                             .then(res => {
                                 this.$message.destroy();
@@ -300,8 +300,8 @@
                     if (redirect == config.HOME_PAGE) {
                         redirect = config.HOME_PAGE + '/' + org.code
                     }
-                    console.log('redirect');
-                    console.log(redirect);
+
+
                     this.$router.push({
                         path: redirect
                     });

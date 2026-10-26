@@ -1,5 +1,5 @@
 export default {
-    SET_LOGGED(state, {tokenList, userInfo}) {
+    SET_LOGGED(state, {userInfo}) {
         state.logged = true;
         state.userInfo = userInfo;
     },

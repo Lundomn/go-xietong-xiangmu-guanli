@@ -52,7 +52,7 @@
             websocketOnMessage(e) { //数据接收
                 const data = JSON.parse(e.data);
                 if (data.action != 'ping') {
-                    console.log(data);
+
                     this.$store.commit('catchSocketAction', data);
                 }
                 if (data.action === 'connect') {
@@ -70,12 +70,12 @@
                 }
             },
             websocketSend(agentData) {//数据发送
-                console.log("发送消息：");
-                console.log(agentData);
+
+
                 this.websocket.send(agentData);
             },
-            websocketClose(e) {  //关闭
-                console.log("connection closed (" + e.code + ")");
+            websocketClose() {  //关闭
+
             }
         },
         created() {

@@ -336,7 +336,7 @@
     import {list as accountList} from "../../api/user";
     import pagination from "../../mixins/pagination";
     import {getLogBySelfProject, selfList, taskDone} from "@/api/task";
-    import task from "../project/space/task";
+
     import {checkResponse} from "assets/js/utils";
 
     export default {
@@ -398,11 +398,11 @@
             this.init();
         },
         watch:{
-            $route: function (to, from) {
+            $route: function () {
                 this.init();
             },
             socketAction(val) {
-                console.log(val);
+
                 if (val.action === 'organization:task') {
                     this.init(false, false);
                 }
@@ -467,7 +467,7 @@
                 })
             },
             taskTabChange(key) {
-                console.log(key);
+
                 this.task.taskType = key;
                 this.task.loadingMore = true;
                 this.getTasks();
@@ -477,12 +477,12 @@
                 this.task.loadingMore = true;
                 this.getTasks();
             },
-            onLoadMoreTask(page, PageSize) {
+            onLoadMoreTask(page) {
                 this.task.loadingMore = true;
                 this.task.page = page;
                 this.getTasks(false);
             },
-            onLoadMoreAccounts(page, PageSize) {
+            onLoadMoreAccounts(page) {
                 this.accounts.loadingMore = true;
                 this.accounts.page = page;
                 this.getAccountList();
@@ -502,10 +502,10 @@
                     this.getTasks(false);
                 });
             },
-            onLoadMoreEvents(page, PageSize) {
+            onLoadMoreEvents() {
                 return false;
             },
-            confirmJoinEvents(events, status) {
+            confirmJoinEvents() {
                 return false;
             },
             priColor(pri) {

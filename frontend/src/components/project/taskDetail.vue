@@ -21,6 +21,14 @@
                 <span class="header-action text-right">
                         <template v-if="!task.deleted">
                             <a-tooltip :mouseEnterDelay="0.5">
+                                <template slot="title">
+                                    <span>一键生成 AI 任务总结</span>
+                                </template>
+                                <a class="action-item muted" @click="openTaskSummary">
+                                    <a-icon type="robot"/>
+                                </a>
+                            </a-tooltip>
+                            <a-tooltip :mouseEnterDelay="0.5">
                             <template slot="title">
                                 <span>复制任务链接</span>
                             </template>
@@ -1065,6 +1073,24 @@
                 </a-form-item>
             </a-form>
         </a-modal>
+        <a-modal
+                class="task-summary-modal"
+                width="760px"
+                v-model="taskSummaryModal.visible"
+                title="AI 任务总结"
+                :footer="null"
+        >
+            <div class="task-summary-toolbar">
+                <a-button type="primary" icon="robot" :loading="taskSummaryModal.loading"
+                          @click="generateTaskSummary">重新生成</a-button>
+                <a-button icon="copy" :disabled="!taskSummaryData" @click="copyTaskSummary">复制 Markdown</a-button>
+            </div>
+            <a-alert v-if="taskSummaryData" class="m-b" type="info"
+                     :message="'生成方式：' + (taskSummaryData.generated_by === 'ai' ? 'AI 模型' : '本地规则兜底')"
+                     :description="taskSummaryData.fallback_reason || '上下文由 project-api MCP 工具层提供'"/>
+            <pre v-if="taskSummaryData" class="task-summary-markdown">{{taskSummaryData.markdown}}</pre>
+            <a-empty v-else description="点击重新生成任务总结"/>
+        </a-modal>
     </div>
 </template>
 
@@ -1093,6 +1119,7 @@
         setTag,
         taskSources
     } from "../../api/task";
+    import {taskSummary as generateTaskSummaryReport} from "../../api/report";
     import ATextarea from "ant-design-vue/es/input/TextArea";
     import {detail} from "../../api/departmentMember";
 
@@ -1133,6 +1160,12 @@
                 taskMemberList: [],
                 workTimeList: [],
                 workTimeTotal: [],
+                taskSummaryData: null,
+                taskSummaryRequestId: 0,
+                taskSummaryModal: {
+                    visible: false,
+                    loading: false,
+                },
 
                 /*任务菜单*/
                 visibleTaskMenu: false,
@@ -1250,7 +1283,7 @@
             }
         },
         watch: {
-            $route(to, from) {
+            $route() {
                 // if (from.name == 'taskdetail') {
                 //     this.init();
                 // }
@@ -1272,7 +1305,7 @@
                 }
             },
             uploader: {
-                handler(newVal, oldVal) {
+                handler(newVal) {
                     //监听是否有上传文件行为
                     if (!newVal) {
                         return;
@@ -1300,7 +1333,6 @@
                 })()
             };
             document.onkeydown = (event) => {
-                console.log(event);
                 var e = event || window.event || arguments.callee.caller.arguments[0];
                 if (13 == e.keyCode && e.ctrlKey) {
                     //处理的部分
@@ -1328,6 +1360,10 @@
                 if (code) {
                     this.code = code;//子任务
                 }
+                this.taskSummaryData = null;
+                this.taskSummaryRequestId++;
+                this.taskSummaryModal.visible = false;
+                this.taskSummaryModal.loading = false;
                 if (loading) {
                     this.loading = true;
                 }
@@ -1387,6 +1423,56 @@
                         projectName: res.data.projectName
                     })
                 });
+            },
+            openTaskSummary() {
+                this.taskSummaryModal.visible = true;
+                if (!this.taskSummaryData) {
+                    this.generateTaskSummary();
+                }
+            },
+            generateTaskSummary() {
+                if (!this.code || !this.projectCodeCurrent || this.taskSummaryModal.loading) {
+                    return;
+                }
+                const requestId = ++this.taskSummaryRequestId;
+                this.taskSummaryModal.loading = true;
+                return generateTaskSummaryReport({
+                    projectCode: this.projectCodeCurrent,
+                    taskCode: this.code,
+                }).then(res => {
+                    if (requestId === this.taskSummaryRequestId && checkResponse(res)) {
+                        this.taskSummaryData = res.data;
+                    }
+                }).catch(() => {
+                    if (requestId === this.taskSummaryRequestId) {
+                        this.$message.error('任务总结生成失败，请重试');
+                    }
+                }).finally(() => {
+                    if (requestId === this.taskSummaryRequestId) {
+                        this.taskSummaryModal.loading = false;
+                    }
+                });
+            },
+            copyTaskSummary() {
+                const text = this.taskSummaryData && this.taskSummaryData.markdown;
+                if (!text) {
+                    return;
+                }
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(text).then(() => {
+                        this.$message.success('已复制任务总结 Markdown');
+                    });
+                    return;
+                }
+                const textarea = document.createElement('textarea');
+                textarea.value = text;
+                textarea.style.position = 'fixed';
+                textarea.style.opacity = '0';
+                document.body.appendChild(textarea);
+                textarea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textarea);
+                this.$message.success('已复制任务总结 Markdown');
             },
             downloadFile(item) {
                 const detail = item && item.sourceDetail;
@@ -1541,7 +1627,7 @@
                     okType: 'danger',
                     cancelText: `再想想`,
                     onOk() {
-                        del(app.code).then((res) => {
+                        del(app.code).then(() => {
                             ``
                             app.detailClose();
                         });
@@ -2420,6 +2506,26 @@
             }
         }
     }
+
+    .task-summary-modal {
+        .task-summary-toolbar {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+
+        .task-summary-markdown {
+            max-height: 520px;
+            overflow: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+            background: #fafafa;
+            border: 1px solid #f0f0f0;
+            border-radius: 4px;
+            padding: 16px;
+        }
+    }
+
     .footer{
         .ant-popover-inner-content{
             padding: 0;

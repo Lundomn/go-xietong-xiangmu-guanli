@@ -1,9 +1,9 @@
-go 1.18
+go 1.23.0
 
 use (
 	./project-api
 	./project-common
-	./project-user
 	./project-grpc
 	./project-project
+	./project-user
 )

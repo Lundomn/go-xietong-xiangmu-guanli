@@ -6,7 +6,7 @@ export default {
                 page: 1,
                 pageSize: 10,
                 total: 0,
-                showTotal: (total, range) => `共 ${total} 条`
+                showTotal: (total) => `共 ${total} 条`
             },
             // requestData: {
             //     page: this.pagination.page,

@@ -68,7 +68,7 @@
 </template>
 
 <script>
-    import _ from 'lodash'
+
     import {del, edit, list, save} from "../../api/taskTag";
     import {setTag, taskToTags} from "../../api/task";
     import {checkResponse} from "../../assets/js/utils";

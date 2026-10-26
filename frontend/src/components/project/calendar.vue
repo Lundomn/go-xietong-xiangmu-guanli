@@ -288,7 +288,7 @@ export default {
             this.getEventsListByCalendar(this.calendarValue);
         },
         changeMonth(num, onChange) {
-            console.log(num);
+
             if (num) {
                 this.calendarValue.add(num, 'months')
                 onChange(this.calendarValue)
@@ -303,14 +303,14 @@ export default {
             let listData = this.list[date];
             return listData || [];
         },
-        onPanelChange(value, mode) {
-            console.log(value, mode);
+        onPanelChange(value) {
+
             this.getEventsListByCalendar(value);
         },
         getEventsListByCalendar(value) {
-            let app = this;
+
             let obj = {date: value.format('YYYY-MM-DD HH:mm:ss'), memberCodes: JSON.stringify(this.memberCodes)};
-            console.log(obj);
+
             // this.showData = false;
             getEventsListByCalendar(obj).then(res => {
                 this.list = res.data.list;
@@ -389,7 +389,7 @@ export default {
             }else {
                 this.code = '';
             }
-            console.log(record);
+
             if (action == 'add' || action == 'edit' || action == 'new') {
                 app.eventsCode = '';
                 if (action == 'edit') {

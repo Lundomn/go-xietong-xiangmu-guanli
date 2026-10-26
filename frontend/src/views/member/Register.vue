@@ -198,7 +198,7 @@
             },
 
             handleSubmit() {
-                this.form.validateFields((err, values) => {
+                this.form.validateFields((err) => {
                     if (!err) {
                         this.registerBtn = true;
                         let params = this.form.getFieldsValue();
@@ -272,7 +272,7 @@
             },
         },
         watch: {
-            'state.passwordLevel'(val) {
+            'state.passwordLevel'() {
                 // console.log(val)
 
             }

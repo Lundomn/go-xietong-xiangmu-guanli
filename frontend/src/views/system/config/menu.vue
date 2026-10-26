@@ -198,8 +198,8 @@
 <script>
     import {Table, Button, Divider, Modal, Form, Input, Checkbox} from 'ant-design-vue';
     import {getMenu, doMenu, forbid, resume, delMenu} from '@/api/menu';
-    import {createRoute, checkResponse} from '@/assets/js/utils';
-    import {getStore} from '@/assets/js/storage';
+    import {checkResponse} from '@/assets/js/utils';
+
     import {allList} from "@/api/node";
     import debounce from 'lodash/debounce';
 
@@ -352,14 +352,14 @@
                     record.status = Number(!status);
                     status ? forbid(record.id, record.status) : resume(record.id, record.status);
                 } else if (action == 'del') {
-                    const confirm = Modal.confirm({
+                    Modal.confirm({
                         title: '确定要删除此菜单?',
                         content: '删除后不可恢复，且子菜单会被同时删除',
                         okText: '确定',
                         okType: 'danger',
                         cancelText: '放弃',
                         onOk() {
-                            delMenu(record.id).then(res => {
+                            delMenu(record.id).then(() => {
                                 app.dataSource.forEach(function (v, k) {
                                     if (v.id == record.id) {
                                         app.dataSource.splice(k, 1);
@@ -385,13 +385,13 @@
                             });
                             return Promise.resolve();
                         }
-                    })
+                    });
                 }
             },
             handleSubmit() {
                 let app = this;
                 app.form.validateFields(
-                    (err, values) => {
+                    (err) => {
                         if (!err) {
                             app.handleOk();
                         }
@@ -497,7 +497,7 @@
                     app.actionInfo.modalStatus = false;
                 });
             },
-            handleChange(value) {
+            handleChange() {
                 this.nodeList = [];
                 this.fetching = false;
                 // Object.assign(this, {

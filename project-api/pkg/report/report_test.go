@@ -118,4 +118,71 @@ func TestGeneratorFallsBackWhenProviderFails(t *testing.T) {
 	if generated.GeneratedBy != "local-fallback" || generated.Markdown == "" {
 		t.Fatalf("expected local fallback, got %+v", generated)
 	}
+	if generated.FallbackReason == "" {
+		t.Fatal("fallback reason should be visible to the caller")
+	}
+}
+
+func TestBuildLocalTaskSummaryUsesTaskEvidence(t *testing.T) {
+	generated := BuildLocalTaskSummary(TaskSummaryInput{
+		ProjectName: "研发协同",
+		Task: Task{
+			Name:        "补充测试",
+			Assignee:    "小王",
+			EndAt:       "2099-09-08 18:00:00",
+			Done:        false,
+			Description: "补齐核心链路测试",
+		},
+		Activities: []Activity{{TaskName: "补充测试", Content: "已补充接口用例", At: "2026-09-08 12:00:00"}},
+	})
+	if generated.GeneratedBy != "local" || generated.ActivityCount != 1 {
+		t.Fatalf("unexpected task summary: %+v", generated)
+	}
+	if !strings.Contains(generated.Markdown, "补充测试") || !strings.Contains(generated.Markdown, "接口用例") {
+		t.Fatalf("task summary did not render expected evidence: %s", generated.Markdown)
+	}
+}
+
+func TestTaskSummaryProviderFailuresPreserveLocalEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{"unavailable", http.StatusServiceUnavailable, "unavailable"},
+		{"malformed JSON", http.StatusOK, "not JSON"},
+		{"empty answer", http.StatusOK, `{"choices":[{"message":{"content":" "}}]}`},
+		{"oversized response", http.StatusOK, `{"choices":[{"message":{"content":"` + strings.Repeat("x", 1<<20) + `"}}]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+			generator := &Generator{client: server.Client(), provider: "openai-compatible", url: server.URL, apiKey: "test", model: "test"}
+			input := TaskSummaryInput{Task: Task{ID: "T1", Name: "接口联调"}, Activities: []Activity{{Content: "已完成鉴权"}}}
+			output := generator.GenerateTaskSummary(context.Background(), input)
+			if output.GeneratedBy != "local-fallback" || output.Task.ID != "T1" || output.ActivityCount != 1 || output.FallbackReason == "" {
+				t.Fatalf("fallback lost task evidence: %+v", output)
+			}
+			if !strings.Contains(output.Markdown, "已完成鉴权") {
+				t.Fatalf("local evidence missing from fallback: %s", output.Markdown)
+			}
+		})
+	}
+}
+
+func TestTaskSummaryCancelledRequestFallsBack(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("already cancelled requests must not reach the provider")
+	}))
+	defer server.Close()
+	g := &Generator{client: server.Client(), provider: "openai-compatible", url: server.URL, apiKey: "test", model: "test"}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	output := g.GenerateTaskSummary(ctx, TaskSummaryInput{Task: Task{ID: "T1", Name: "接口联调"}})
+	if output.GeneratedBy != "local-fallback" || output.Markdown == "" {
+		t.Fatalf("unexpected result for cancelled model request: %+v", output)
+	}
 }

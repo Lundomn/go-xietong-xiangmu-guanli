@@ -201,7 +201,7 @@
             handleSubmit() {
                 let app = this;
                 app.form.validateFields(
-                    (err, values) => {
+                    (err) => {
                         if (!err) {
                             app.handleOk();
                         }
@@ -218,7 +218,7 @@
                     //新增
                     Object.assign(obj, app.newData);
                 }
-                console.log(obj);
+
                 doAuth(obj).then(res => {
                     app.actionInfo.confirmLoading = false;
                     if (!checkResponse(res)) {

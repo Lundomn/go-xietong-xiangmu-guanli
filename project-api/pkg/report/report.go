@@ -33,14 +33,14 @@ var reportLocation = func() *time.Location {
 
 // Task is the small, presentation-independent task shape used by the report engine.
 type Task struct {
-	ID          string
-	Name        string
-	Description string
-	Assignee    string
-	CreatedAt   string
-	EndAt       string
-	Priority    int
-	Done        bool
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Assignee    string `json:"assignee,omitempty"`
+	CreatedAt   string `json:"created_at,omitempty"`
+	EndAt       string `json:"end_at,omitempty"`
+	Priority    int    `json:"priority"`
+	Done        bool   `json:"done"`
 }
 
 // Activity is a task/project activity in the report period.
@@ -91,16 +91,46 @@ type Stats struct {
 
 // WeeklyReport is returned by the weekly report endpoint.
 type WeeklyReport struct {
-	ProjectCode string         `json:"project_code"`
-	ProjectName string         `json:"project_name"`
-	Period      Period         `json:"period"`
-	Stats       Stats          `json:"stats"`
-	Health      *HealthSummary `json:"health,omitempty"`
-	Highlights  []string       `json:"highlights"`
-	Risks       []string       `json:"risks"`
-	NextSteps   []string       `json:"next_steps"`
-	Markdown    string         `json:"markdown"`
-	GeneratedBy string         `json:"generated_by"`
+	ProjectCode    string         `json:"project_code"`
+	ProjectName    string         `json:"project_name"`
+	Period         Period         `json:"period"`
+	Stats          Stats          `json:"stats"`
+	Health         *HealthSummary `json:"health,omitempty"`
+	Highlights     []string       `json:"highlights"`
+	Risks          []string       `json:"risks"`
+	NextSteps      []string       `json:"next_steps"`
+	Markdown       string         `json:"markdown"`
+	GeneratedBy    string         `json:"generated_by"`
+	Orchestrator   string         `json:"orchestrator,omitempty"`
+	MCPTools       []string       `json:"mcp_tools,omitempty"`
+	FallbackReason string         `json:"fallback_reason,omitempty"`
+}
+
+// TaskSummaryInput is the normalized context used by the task-summary
+// orchestrator. It intentionally reuses the same Task and Activity shapes as
+// the weekly report so both AI features share one evidence model.
+type TaskSummaryInput struct {
+	ProjectCode string
+	ProjectName string
+	Task        Task
+	Activities  []Activity
+	Focus       string
+}
+
+// TaskSummary is returned by the task detail one-click action.
+type TaskSummary struct {
+	ProjectCode    string   `json:"project_code"`
+	ProjectName    string   `json:"project_name"`
+	Task           Task     `json:"task"`
+	ActivityCount  int      `json:"activity_count"`
+	Highlights     []string `json:"highlights"`
+	Risks          []string `json:"risks"`
+	NextSteps      []string `json:"next_steps"`
+	Markdown       string   `json:"markdown"`
+	GeneratedBy    string   `json:"generated_by"`
+	Orchestrator   string   `json:"orchestrator,omitempty"`
+	MCPTools       []string `json:"mcp_tools,omitempty"`
+	FallbackReason string   `json:"fallback_reason,omitempty"`
 }
 
 // ResolvePeriod returns a [start, end) period. With no dates it uses the current
@@ -306,6 +336,120 @@ func BuildLocalReport(input Input) WeeklyReport {
 	return report
 }
 
+// BuildLocalTaskSummary creates a deterministic summary for one task. The
+// local path is useful even when no model is configured and is also the safety
+// net when the model times out or returns malformed data.
+func BuildLocalTaskSummary(input TaskSummaryInput) TaskSummary {
+	task := input.Task
+	summary := TaskSummary{
+		ProjectCode:   input.ProjectCode,
+		ProjectName:   input.ProjectName,
+		Task:          task,
+		ActivityCount: len(input.Activities),
+		Highlights:    make([]string, 0),
+		Risks:         make([]string, 0),
+		NextSteps:     make([]string, 0),
+		GeneratedBy:   "local",
+	}
+	if task.Done {
+		summary.Highlights = append(summary.Highlights, "任务已完成，可在复盘中确认交付结果和遗留事项。")
+	} else {
+		summary.Highlights = append(summary.Highlights, "任务仍在推进中，需要持续同步进展和下一步动作。")
+	}
+	if strings.TrimSpace(task.Assignee) != "" {
+		summary.Highlights = append(summary.Highlights, "当前负责人："+task.Assignee+"。")
+	} else {
+		summary.Risks = append(summary.Risks, "当前任务尚未设置负责人。")
+	}
+	if summary.ActivityCount > 0 {
+		summary.Highlights = append(summary.Highlights, fmt.Sprintf("本周期记录 %d 条任务动态。", summary.ActivityCount))
+		for _, activity := range input.Activities {
+			content := strings.TrimSpace(activity.Content)
+			if content == "" {
+				content = strings.TrimSpace(activity.Remark)
+			}
+			if content == "" {
+				continue
+			}
+			summary.Highlights = append(summary.Highlights, "动态："+truncate(content, 160))
+			if len(summary.Highlights) >= 4 {
+				break
+			}
+		}
+	} else {
+		summary.Risks = append(summary.Risks, "本周期没有记录到任务动态，建议补充实际进展。")
+	}
+	if deadline, ok := parseDate(task.EndAt); ok && !task.Done && deadline.Before(time.Now().In(reportLocation)) {
+		summary.Risks = append(summary.Risks, "任务已超过截止时间，建议确认阻塞原因并重新排期。")
+	}
+	if len(summary.Risks) == 0 {
+		summary.Risks = append(summary.Risks, "暂未发现明确风险，继续保持任务动态更新。")
+	}
+	if task.Done {
+		summary.NextSteps = append(summary.NextSteps, "补充验收结果、相关文档和后续维护人。")
+	} else {
+		summary.NextSteps = append(summary.NextSteps, "确认下一步动作、负责人和可验证的完成标准。")
+	}
+	if len(summary.NextSteps) < 2 && len(input.Activities) == 0 {
+		summary.NextSteps = append(summary.NextSteps, "在下一次推进后记录一条任务动态，便于团队追踪。")
+	}
+	summary.Markdown = renderTaskSummaryMarkdown(summary, input.Focus)
+	return summary
+}
+
+// GenerateTaskSummary follows the same provider/fallback policy as the
+// weekly report generator. The model only receives normalized task evidence.
+func (g *Generator) GenerateTaskSummary(ctx context.Context, input TaskSummaryInput) TaskSummary {
+	localSummary := BuildLocalTaskSummary(input)
+	if g == nil || !g.remoteEnabled() {
+		localSummary.FallbackReason = "未配置可用的大模型，使用本地规则生成。"
+		return localSummary
+	}
+	markdown, err := g.generateTaskRemote(ctx, input, localSummary)
+	if err != nil {
+		localSummary.GeneratedBy = "local-fallback"
+		localSummary.FallbackReason = "大模型调用失败，已回退本地规则生成。"
+		return localSummary
+	}
+	localSummary.Markdown = markdown
+	localSummary.GeneratedBy = "ai"
+	localSummary.FallbackReason = ""
+	return localSummary
+}
+
+func renderTaskSummaryMarkdown(summary TaskSummary, focus string) string {
+	var builder strings.Builder
+	builder.WriteString("# 任务总结｜" + taskName(summary.Task) + "\n\n")
+	builder.WriteString("项目：" + summary.ProjectName + "\n\n")
+	if strings.TrimSpace(focus) != "" {
+		builder.WriteString("关注重点：" + strings.TrimSpace(focus) + "\n\n")
+	}
+	builder.WriteString("## 任务概况\n\n")
+	builder.WriteString(fmt.Sprintf("- 状态：%s\n- 负责人：%s\n- 截止时间：%s\n- 动态数量：%d\n\n",
+		map[bool]string{true: "已完成", false: "进行中"}[summary.Task.Done],
+		valueOrDefault(summary.Task.Assignee, "待分配"),
+		valueOrDefault(summary.Task.EndAt, "未设置"),
+		summary.ActivityCount,
+	))
+	if strings.TrimSpace(summary.Task.Description) != "" {
+		builder.WriteString("## 任务描述\n\n" + strings.TrimSpace(summary.Task.Description) + "\n\n")
+	}
+	builder.WriteString("## 进展亮点\n\n")
+	writeItems(&builder, summary.Highlights)
+	builder.WriteString("\n## 风险与阻塞\n\n")
+	writeItems(&builder, summary.Risks)
+	builder.WriteString("\n## 下一步\n\n")
+	writeItems(&builder, summary.NextSteps)
+	return strings.TrimSpace(builder.String())
+}
+
+func valueOrDefault(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
+}
+
 func lenUnassigned(tasks []Task) int {
 	count := 0
 	for _, item := range tasks {
@@ -419,15 +563,18 @@ func NewGenerator() *Generator {
 func (g *Generator) Generate(ctx context.Context, input Input) WeeklyReport {
 	localReport := BuildLocalReport(input)
 	if g == nil || !g.remoteEnabled() {
+		localReport.FallbackReason = "未配置可用的大模型，使用本地规则生成。"
 		return localReport
 	}
 	markdown, err := g.generateRemote(ctx, input, localReport)
 	if err != nil {
 		localReport.GeneratedBy = "local-fallback"
+		localReport.FallbackReason = "大模型调用失败，已回退本地规则生成。"
 		return localReport
 	}
 	localReport.Markdown = markdown
 	localReport.GeneratedBy = "ai"
+	localReport.FallbackReason = ""
 	return localReport
 }
 
@@ -459,10 +606,19 @@ type chatResponse struct {
 
 func (g *Generator) generateRemote(ctx context.Context, input Input, localReport WeeklyReport) (string, error) {
 	prompt := buildPrompt(input, localReport)
+	return g.generateRemotePrompt(ctx, "你是一名项目管理顾问。请根据给定数据生成一份客观、简洁、可执行的中文项目周报，只输出 Markdown，不要虚构数据。", prompt)
+}
+
+func (g *Generator) generateTaskRemote(ctx context.Context, input TaskSummaryInput, localSummary TaskSummary) (string, error) {
+	prompt := buildTaskPrompt(input, localSummary)
+	return g.generateRemotePrompt(ctx, "你是一名项目管理顾问。请根据给定任务事实生成一份客观、简洁、可执行的中文任务总结，只输出 Markdown，不要虚构数据。", prompt)
+}
+
+func (g *Generator) generateRemotePrompt(ctx context.Context, systemPrompt, prompt string) (string, error) {
 	body, err := json.Marshal(chatRequest{
 		Model: g.model,
 		Messages: []chatMessage{
-			{Role: "system", Content: "你是一名项目管理顾问。请根据给定数据生成一份客观、简洁、可执行的中文项目周报，只输出 Markdown，不要虚构数据。"},
+			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: prompt},
 		},
 		Temperature: 0.2,
@@ -496,6 +652,20 @@ func (g *Generator) generateRemote(ctx context.Context, input Input, localReport
 		return "", fmt.Errorf("AI provider returned an empty report")
 	}
 	return truncate(parsed.Choices[0].Message.Content, 20000), nil
+}
+
+func buildTaskPrompt(input TaskSummaryInput, localSummary TaskSummary) string {
+	payload := map[string]any{
+		"project_name":     input.ProjectName,
+		"focus":            input.Focus,
+		"task":             input.Task,
+		"activity_count":   len(input.Activities),
+		"activities":       input.Activities,
+		"local_risks":      localSummary.Risks,
+		"local_next_steps": localSummary.NextSteps,
+	}
+	encoded, _ := json.MarshalIndent(payload, "", "  ")
+	return "请基于以下 JSON 生成任务总结，必须包含：任务概况、已完成/进行中进展、风险或阻塞、下一步动作；保持任务名称、负责人和时间准确。\n\n" + string(encoded)
 }
 
 func buildPrompt(input Input, localReport WeeklyReport) string {

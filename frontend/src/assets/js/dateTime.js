@@ -5,14 +5,10 @@
 import moment from "moment";
 
 export const getWeekDay = () => {
-    //起止日期数组
-    var startStop = [];
     //获取当前时间
     var currentDate = new Date();
     //返回date是一周中的某一天
     var week = currentDate.getDay();
-    //返回date是一个月中的某一天
-    var month = currentDate.getDate();
 
     //一天的毫秒数
     var millisecond = 1000 * 60 * 60 * 24;

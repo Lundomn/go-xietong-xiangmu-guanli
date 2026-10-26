@@ -100,7 +100,7 @@ export default {
         },
         // 筛选编辑器菜单
         filterMenu(menus) {
-            return _.map(menus, (item, key) => {
+            return _.map(menus, (item) => {
                 if (item === 'source') {
                     return null
                 }

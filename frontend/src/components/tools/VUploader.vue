@@ -90,7 +90,7 @@
 </template>
 
 <script>
-    import {checkResponse, getApiUrl, getAuthorization} from "../../assets/js/utils";
+    import {checkResponse, getAuthorization} from "../../assets/js/utils";
     import {mapState} from 'vuex'
     import {getStore} from "../../assets/js/storage";
     import {notice} from "../../assets/js/notice";
@@ -168,7 +168,7 @@
                 }
                 window.uploader = this.$refs.uploader.uploader;
                 this.$store.dispatch('setUploader', window.uploader);
-                console.log(window.uploader);
+
             })
         },
         methods: {
@@ -181,12 +181,12 @@
                     this.uploader.cancel();
                 }
             },
-            fileAdded(files, fileList, event) {
+            fileAdded(files, fileList) {
                 let ignored = false;
                 let fileName = '';
                 const singleMaxSize = this.singleMaxSize * 1024 * 1024;
-                console.log(fileList);
-                fileList.forEach((v, k) => {
+
+                fileList.forEach((v) => {
                     if (v.size > singleMaxSize) {
                         ignored = true;
                         fileName = v.file.name;
@@ -206,15 +206,15 @@
                 this.showUploader = true;
                 this.showFiles = true;
                 this.progressTotal += files.length;
-                console.log('file submitted', files)
+
 
             },
-            fileProgress(rootFile, file, chunk) { //有文件上传中
+            fileProgress() { //有文件上传中
                 this.showUploader = true;
                 this.showFiles = true;
-                console.log('file progress', arguments)
+
             },
-            fileSuccess(rootFile, file, message, chunk) { //一个文件上传成功
+            fileSuccess(rootFile, file, message) { //一个文件上传成功
                 let response = {};
                 try {
                     response = JSON.parse(message);
@@ -228,10 +228,10 @@
                 }
                 rootFile.projectName = response.data.projectName;
                 rootFile.fileUrl = response.data.url;
-                console.log('file success', rootFile);
+
                 this.completeTotal++;
             },
-            fileError(rootFile, file, message, chunk) { //一个文件上传失败
+            fileError(rootFile, file, message) { //一个文件上传失败
                 this.progressTotal--;
                 this.completeTotal--;
                 let response = {};
@@ -242,14 +242,14 @@
                 }
                 file.cancel();
                 rootFile.projectName = response.data && response.data.projectName;
-                console.log('file error', rootFile);
+
                 notice({title: response.msg}, 'notice', 'error');
             },
-            fileComplete(rootFile) { //一个文件上传完成
-                console.log('file complete', rootFile);
+            fileComplete() { //一个文件上传完成
+
             },
             complete() { //所有文件上传完成
-                console.log('complete', arguments);
+
                 this.progressTotal = this.completeTotal = 0;
                 notice({title: '关联文件成功'}, 'notice', 'success');
                 setTimeout(() => {
@@ -257,17 +257,16 @@
                 }, 3000);
             },
             cancelUpload(file) {
-                console.log(file);
+
                 this.progressTotal--;
                 this.completeTotal--;
                 file.file.cancel();
             },
             filterList(list) {
                 return list;
-                return list.reverse();
             },
             testSomeThing() {
-                console.log(this.uploader.fileList);
+
                 this.uploader.fileList[0].resume();
             },
         }

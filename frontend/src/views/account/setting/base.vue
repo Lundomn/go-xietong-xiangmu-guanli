@@ -76,7 +76,7 @@
     import AccountSetting from "@/components/layout/account/setting"
     import {checkResponse, getApiUrl, getAuthorization, getBase64} from "../../../assets/js/utils";
     import {editPersonal} from "../../../api/user";
-    import {getStore} from "../../../assets/js/storage";
+
     import {destroyNotice, notice} from "../../../assets/js/notice";
 
     export default {
@@ -113,7 +113,7 @@
             handleSubmit() {
                 let app = this;
                 this.form.validateFields(
-                    (err, values) => {
+                    (err) => {
                         if (!err) {
                             let obj = app.form.getFieldsValue();
                             obj.code = app.userInfo.code;
@@ -140,7 +140,7 @@
                     return
                 }
                 if (info.file.status === 'done') {
-                    getBase64(info.file.originFileObj, (imageUrl) => {
+                    getBase64(info.file.originFileObj, () => {
                         this.userInfo.avatar = info.file.response.data.url;
                         this.$store.dispatch('SET_USER', this.userInfo);
                         this.uploadLoading = false;

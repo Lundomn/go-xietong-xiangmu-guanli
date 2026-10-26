@@ -345,7 +345,7 @@
             handlePasswordSubmit() {
                 let app = this;
                 this.form.validateFields(
-                    (err, values) => {
+                    (err) => {
                         if (!err) {
                             let obj = app.form.getFieldsValue();
                             if (obj.password.length < 6 || obj.newPassword.length < 6 || obj.confirmPassword.length < 6) {
@@ -376,7 +376,7 @@
             handleMobileSubmit() {
                 let app = this;
                 this.mobileForm.validateFields(
-                    (err, values) => {
+                    (err) => {
                         if (!err) {
                             let obj = app.mobileForm.getFieldsValue();
                             this.setErrorTips('');
@@ -401,7 +401,7 @@
             handleMailSubmit() {
                 let app = this;
                 this.mailForm.validateFields(
-                    (err, values) => {
+                    (err) => {
                         if (!err) {
                             let obj = app.mailForm.getFieldsValue();
                             this.setErrorTips('');
@@ -437,7 +437,7 @@
                             }
                         }, 1000);
 
-                        const hide = this.$message.loading('验证码发送中..', 0);
+                        this.$message.loading('验证码发送中..', 0);
                         getCaptcha(values.mobile)
                             .then(res => {
                                 this.$message.destroy();

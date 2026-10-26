@@ -592,7 +592,7 @@
             }
         },
         watch: {
-            $route(to, from) {
+            $route() {
                 // if (from.name == 'taskdetail') {
                 //     this.init();
                 // }
@@ -749,7 +749,7 @@
                     okType: 'danger',
                     cancelText: `再想想`,
                     onOk() {
-                        del(app.code).then((res) => {
+                        del(app.code).then(() => {
                             ``
                             app.detailClose();
                         });
@@ -782,7 +782,7 @@
                     });
 
                 } else {
-                    changeStatus({versionCode: this.version.code, status: e.key}).then(res => {
+                    changeStatus({versionCode: this.version.code, status: e.key}).then(() => {
                         this.getVersion();
                     });
                 }
@@ -798,7 +798,7 @@
                                 versionCode: this.code,
                                 status: this.publishVersion.status,
                                 publishTime: obj.publishTime,
-                            }).then(res => {
+                            }).then(() => {
                                 app.publishVersion.modalStatus = false;
                                 app.getVersion();
                             });

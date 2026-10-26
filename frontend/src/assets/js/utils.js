@@ -1,6 +1,7 @@
 import {notice} from './notice';
 import {getStore} from "./storage";
 import Axios from "axios";
+import {Modal} from 'ant-design-vue';
 
 /**
  * 判断客户端返回状态
@@ -374,7 +375,6 @@ Array.prototype.each = function (fn) {
         }
         this.i = null;    //进行垃圾回收 删除引用标记
     } catch (ex) {
-        console.log(ex);
         //do something
     }
 };

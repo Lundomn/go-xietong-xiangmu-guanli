@@ -1,4 +1,7 @@
 .data
+.git
+tmp
+output
 project-api/upload
 profile_test
 *.pprof

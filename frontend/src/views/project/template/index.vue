@@ -116,7 +116,7 @@
     import {list, doData, del} from '@/api/projectTemplate';
     import {checkResponse, getApiUrl, getBase64} from '@/assets/js/utils';
     import pagination from "@/mixins/pagination";
-    import config from "@/config/config"
+
     import {getAuthorization} from "../../../assets/js/utils";
 
     export default {
@@ -269,7 +269,7 @@
                     return
                 }
                 if (info.file.status === 'done') {
-                    getBase64(info.file.originFileObj, (imageUrl) => {
+                    getBase64(info.file.originFileObj, () => {
                         this.cover = info.file.response.data.url;
                         this.uploadLoading = false;
                     })

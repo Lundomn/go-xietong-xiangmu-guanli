@@ -658,13 +658,13 @@
                     // save
                     if (this.taskWorkflow) {
                         submitData.taskWorkflowCode = this.taskWorkflow.code;
-                        EditTaskWorkflow(submitData).then(res => {
+                        EditTaskWorkflow(submitData).then(() => {
                             this.getTaskWorkflowList();
 
                         });
                     } else {
                         submitData.projectCode = this.code;
-                        saveTaskWorkflow(submitData).then(res => {
+                        saveTaskWorkflow(submitData).then(() => {
                             this.getTaskWorkflowList();
                         });
                     }
@@ -749,8 +749,8 @@
                 });
             },
             workflowRuleChange(value, name) {
-                console.log(value);
-                console.log(name);
+
+
                 if (name == 'firstAction.action') {
                     this.currentTaskWorkflowRule.firstAction.value = '';
                 }

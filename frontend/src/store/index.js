@@ -5,7 +5,6 @@ import mutations from './mutations'
 import actions from './actions'
 import common from './modules/common'
 import menu from './modules/menu'
-import {getStore, setStore} from '@/assets/js/storage'
 
 Vue.use(Vuex);
 

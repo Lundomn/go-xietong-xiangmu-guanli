@@ -3,7 +3,7 @@
 </template>
 
 <script>
-import _ from 'lodash'
+
 import pagination from "@/mixins/pagination";
 import calendar from "@/components/project/calendar";
 

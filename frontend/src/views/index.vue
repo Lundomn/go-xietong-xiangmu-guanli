@@ -82,8 +82,7 @@
                                     <span>{{menu.title}}</span>
                                 </span>
                                 <a-menu-item
-                                        v-for="(secMenu,index) in menu.children"
-                                        v-if="!secMenu.is_inner"
+                                        v-for="secMenu in menu.children.filter(child => !child.is_inner)"
                                         :key="secMenu.id.toString()"
                                         :disabled="!secMenu.status"
                                 >
@@ -127,7 +126,7 @@
     import Socket from '../components/websocket/socket';
     import config from "../config/config";
     import {notice} from "../assets/js/notice";
-    import {getStore} from "../assets/js/storage";
+
     import {_getOrgList} from "../api/organization";
 
     const ASider = ALayout.Sider;
@@ -196,7 +195,7 @@
             }
         },
         watch: {
-            $route: function (to, from) {
+            $route: function () {
                 this.checkLayout();
             },
             collapsed(v) {
@@ -220,9 +219,10 @@
         },
         methods: {
             footerClick() {
-                autoPlay('order');
-                const socket = this.$refs.socket;
-                this.$websocket.send(JSON.stringify({uid: this.$store.state.userInfo.id}));
+                const socket = this.$websocket;
+                if (socket && socket.readyState === WebSocket.OPEN) {
+                    socket.send(JSON.stringify({uid: this.$store.state.userInfo.id}));
+                }
             },
             checkLayout() {
                 //更新左侧菜单选中状态
@@ -333,7 +333,7 @@
             menuModelClick(event) {
                 //点击顶部导航跳转页面
                 let that = this;
-                (that.menu || []).forEach(function (v, k) {
+                (that.menu || []).forEach(function (v) {
                     if (v.id == event.key) {
                         that.menus = v.children;
                         let turnPath = '/';
@@ -356,13 +356,13 @@
                     }
                 });
             },
-            onModelOpenChange(openKeys) {
+            onModelOpenChange() {
             },
             onOpenChange(openKeys) {
                 let that = this;
                 const latestOpenKey = openKeys.find(key => this.openKeys.indexOf(key) === -1);
                 let hasOpenKey = false;
-                (this.menus || []).forEach(function (v, k) {
+                (this.menus || []).forEach(function (v) {
                     if (v.id == latestOpenKey) {
                         that.openKeys = latestOpenKey ? [latestOpenKey] : [];
                         hasOpenKey = true;

@@ -323,7 +323,7 @@
                 });
             },
             syncDetail() {
-                syncDetail({code: this.code}).then(res => {
+                syncDetail({code: this.code}).then(() => {
                     this.getMember();
                 });
             },
@@ -340,7 +340,7 @@
                     this.task.total = res.data.total;
                 })
             },
-            changeTaskType(obj) {
+            changeTaskType() {
                 this.$nextTick(() => {
                     this.getTasks();
                 })

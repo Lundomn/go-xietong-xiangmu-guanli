@@ -246,7 +246,7 @@
             handleSubmit() {
                 let app = this;
                 app.form.validateFields(
-                    (err, values) => {
+                    (err) => {
                         if (!err) {
                             app.handleOk();
                         }
