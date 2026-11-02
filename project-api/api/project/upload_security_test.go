@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"google.golang.org/grpc"
@@ -18,6 +19,7 @@ import (
 	"google.golang.org/grpc/status"
 	"test.com/project-api/pkg/model"
 	common "test.com/project-common"
+	"test.com/project-common/tms"
 	"test.com/project-grpc/task"
 )
 
@@ -41,6 +43,149 @@ func (client *committedUploadClient) SaveTaskFile(_ context.Context, request *ta
 		return nil, client.resultError
 	}
 	return &task.TaskFileResponse{}, nil
+}
+
+func TestUploadFilesCannotOverwriteExistingAttachment(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	originalDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(originalDirectory) })
+	originalClient := TaskServiceClient
+	t.Cleanup(func() { TaskServiceClient = originalClient })
+	for _, firstChunks := range []int{1, 2} {
+		for _, nextChunks := range []int{1, 2} {
+			t.Run(strconv.Itoa(firstChunks)+"-then-"+strconv.Itoa(nextChunks), func(t *testing.T) {
+				client := &committedUploadClient{}
+				TaskServiceClient = client
+				filename := "same-name-" + strconv.Itoa(firstChunks) + "-" + strconv.Itoa(nextChunks) + ".txt"
+				upload := func(content, identifier string, chunks int) common.Result {
+					t.Helper()
+					var result common.Result
+					for number := 1; number <= chunks; number++ {
+						var body bytes.Buffer
+						writer := multipart.NewWriter(&body)
+						for name, value := range map[string]string{
+							"projectCode": "project-code", "taskCode": "task-code", "filename": filename,
+							"totalChunks": strconv.Itoa(chunks), "chunkNumber": strconv.Itoa(number),
+							"totalSize": strconv.Itoa(len(content)), "identifier": identifier,
+						} {
+							if err := writer.WriteField(name, value); err != nil {
+								t.Fatal(err)
+							}
+						}
+						file, err := writer.CreateFormFile("file", filename)
+						if err != nil {
+							t.Fatal(err)
+						}
+						payload := content
+						if chunks == 2 {
+							payload = []string{content[:len(content)/2], content[len(content)/2:]}[number-1]
+						}
+						if _, err := file.Write([]byte(payload)); err != nil {
+							t.Fatal(err)
+						}
+						if err := writer.Close(); err != nil {
+							t.Fatal(err)
+						}
+						response := httptest.NewRecorder()
+						c, _ := gin.CreateTestContext(response)
+						c.Request = httptest.NewRequest(http.MethodPost, "/upload", &body)
+						c.Request.Header.Set("Content-Type", writer.FormDataContentType())
+						c.Set("memberId", int64(1))
+						c.Set("organizationCode", "organization-code")
+						(&HandlerTask{}).uploadFiles(c)
+						if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+							t.Fatal(err)
+						}
+					}
+					return result
+				}
+				if result := upload("original attachment", "first-"+filename, firstChunks); result.Code != 200 {
+					t.Fatalf("initial upload failed: %+v", result)
+				}
+				originalPath := client.committed.PathName
+				if result := upload("different replacement", "second-"+filename, nextChunks); result.Code != 409 {
+					t.Errorf("same-name upload = %+v, want conflict", result)
+				}
+				if got, err := os.ReadFile(filepath.FromSlash(originalPath)); err != nil || string(got) != "original attachment" {
+					t.Errorf("existing attachment overwritten: content=%q err=%v", got, err)
+				}
+				if client.saveCalls != 1 {
+					t.Errorf("conflicting upload created metadata: calls=%d", client.saveCalls)
+				}
+				if nextChunks == 2 {
+					for number := 1; number <= 2; number++ {
+						part := uploadPartPath(filepath.Dir(originalPath), "second-"+filename, number)
+						if _, err := os.Stat(part); err != nil {
+							t.Errorf("conflicting merge lost retry input: %v", err)
+						}
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestUploadChunkCannotOverwritePublishedAttachment(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previous) })
+	client := TaskServiceClient
+	TaskServiceClient = &committedUploadClient{}
+	t.Cleanup(func() { TaskServiceClient = client })
+	directory := filepath.Join("upload", "project-code", "task-code", tms.FormatYMD(time.Now()))
+	if err := os.MkdirAll(directory, 0755); err != nil {
+		t.Fatal(err)
+	}
+	oldPath := filepath.Join(directory, "collision.1.part")
+	if err := os.WriteFile(oldPath, []byte("published attachment"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	for name, value := range map[string]string{
+		"projectCode": "project-code", "taskCode": "task-code", "filename": "fresh.txt",
+		"identifier": "collision", "totalChunks": "2", "chunkNumber": "1", "totalSize": "6",
+	} {
+		if err := writer.WriteField(name, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	file, err := writer.CreateFormFile("file", "fresh.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Write([]byte("new")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(response)
+	c.Request = httptest.NewRequest(http.MethodPost, "/upload", &body)
+	c.Request.Header.Set("Content-Type", writer.FormDataContentType())
+	c.Set("memberId", int64(1))
+	c.Set("organizationCode", "organization-code")
+	(&HandlerTask{}).uploadFiles(c)
+	var result common.Result
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || result.Code != 200 {
+		t.Fatalf("first chunk failed: %+v, %v", result, err)
+	}
+	if got, err := os.ReadFile(oldPath); err != nil || string(got) != "published attachment" {
+		t.Fatalf("chunk path collided with published attachment: content=%q err=%v", got, err)
+	}
 }
 
 func TestUploadFilesPreservesCommittedFileWhenAcknowledgementIsLost(t *testing.T) {
@@ -181,9 +326,12 @@ func TestMergeUploadPartsPreservesChunkOrderAndCleansParts(t *testing.T) {
 	directory := t.TempDir()
 	identifier := "upload-id"
 	filename := "report.txt"
+	if err := os.MkdirAll(filepath.Dir(uploadPartPath(directory, identifier, 1)), 0755); err != nil {
+		t.Fatal(err)
+	}
 	parts := map[int]string{1: "first\n", 2: "second\n", 3: "third\n"}
 	for number, content := range parts {
-		path := filepath.Join(directory, identifier+"."+strconv.Itoa(number)+".part")
+		path := uploadPartPath(directory, identifier, number)
 		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 			t.Fatal(err)
 		}
@@ -204,7 +352,7 @@ func TestMergeUploadPartsPreservesChunkOrderAndCleansParts(t *testing.T) {
 		t.Fatalf("temporary assembling file still exists: %v", err)
 	}
 	for number := range parts {
-		partPath := filepath.Join(directory, identifier+"."+strconv.Itoa(number)+".part")
+		partPath := uploadPartPath(directory, identifier, number)
 		if _, err := os.Stat(partPath); !os.IsNotExist(err) {
 			t.Fatalf("part %s was not cleaned up: %v", partPath, err)
 		}
@@ -215,7 +363,10 @@ func TestMergeUploadPartsCleansTemporaryFileWhenPartIsMissing(t *testing.T) {
 	directory := t.TempDir()
 	identifier := "upload-id"
 	filename := "report.txt"
-	if err := os.WriteFile(filepath.Join(directory, identifier+".1.part"), []byte("first"), 0644); err != nil {
+	if err := os.MkdirAll(filepath.Dir(uploadPartPath(directory, identifier, 1)), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(uploadPartPath(directory, identifier, 1), []byte("first"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -229,7 +380,7 @@ func TestMergeUploadPartsCleansTemporaryFileWhenPartIsMissing(t *testing.T) {
 	if _, statErr := os.Stat(filepath.Join(directory, filename+".assembling")); !os.IsNotExist(statErr) {
 		t.Fatalf("temporary assembling file was not removed: %v", statErr)
 	}
-	if content, readErr := os.ReadFile(filepath.Join(directory, identifier+".1.part")); readErr != nil || string(content) != "first" {
+	if content, readErr := os.ReadFile(uploadPartPath(directory, identifier, 1)); readErr != nil || string(content) != "first" {
 		t.Fatalf("failed merge must preserve the existing part for retry: content=%q, err=%v", content, readErr)
 	}
 }
@@ -238,8 +389,11 @@ func TestMergeUploadPartsPreservesPartsWhenPublishFails(t *testing.T) {
 	directory := t.TempDir()
 	identifier := "upload-id"
 	filename := "report.txt"
+	if err := os.MkdirAll(filepath.Dir(uploadPartPath(directory, identifier, 1)), 0755); err != nil {
+		t.Fatal(err)
+	}
 	for number, content := range []string{"first", "second"} {
-		part := filepath.Join(directory, identifier+"."+strconv.Itoa(number+1)+".part")
+		part := uploadPartPath(directory, identifier, number+1)
 		if err := os.WriteFile(part, []byte(content), 0644); err != nil {
 			t.Fatal(err)
 		}
@@ -254,7 +408,7 @@ func TestMergeUploadPartsPreservesPartsWhenPublishFails(t *testing.T) {
 		t.Fatalf("merge with a blocked destination = (%q, %v), want a failure", finalPath, err)
 	}
 	for number, want := range []string{"first", "second"} {
-		part := filepath.Join(directory, identifier+"."+strconv.Itoa(number+1)+".part")
+		part := uploadPartPath(directory, identifier, number+1)
 		if content, err := os.ReadFile(part); err != nil || string(content) != want {
 			t.Fatalf("part %d lost after publish failure: content=%q, err=%v", number+1, content, err)
 		}

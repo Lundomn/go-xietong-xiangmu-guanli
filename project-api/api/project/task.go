@@ -728,20 +728,25 @@ func validateUploadRequest(req model.UploadFileReq) error {
 	return nil
 }
 
+func uploadPartPath(uploadDir, identifier string, number int) string {
+	// Keep client-controlled chunk names outside the published-file namespace.
+	return filepath.Join(uploadDir, ".parts", identifier, strconv.Itoa(number)+".part")
+}
+
 func mergeUploadParts(uploadDir, identifier, filename string, totalChunks int) (string, error) {
 	finalPath := filepath.Join(uploadDir, filename)
-	assemblingPath := finalPath + ".assembling"
-	assembled, err := os.OpenFile(assemblingPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	assembled, err := os.CreateTemp(uploadDir, ".assembling-*")
 	if err != nil {
 		return "", err
 	}
+	assemblingPath := assembled.Name()
 
 	cleanup := func() {
 		_ = assembled.Close()
 		_ = os.Remove(assemblingPath)
 	}
 	for i := 1; i <= totalChunks; i++ {
-		part := filepath.Join(uploadDir, identifier+"."+strconv.Itoa(i)+".part")
+		part := uploadPartPath(uploadDir, identifier, i)
 		inputPart, openErr := os.Open(part)
 		if openErr != nil {
 			cleanup()
@@ -761,17 +766,21 @@ func mergeUploadParts(uploadDir, identifier, filename string, totalChunks int) (
 		_ = os.Remove(assemblingPath)
 		return "", err
 	}
-	if err = os.Rename(assemblingPath, finalPath); err != nil {
+	// Link publishes the complete file only if the destination does not exist.
+	// Rename would silently replace an older attachment at the same path.
+	if err = os.Link(assemblingPath, finalPath); err != nil {
 		_ = os.Remove(assemblingPath)
 		return "", err
 	}
+	_ = os.Remove(assemblingPath)
 	// Keep every source part until the complete file is published. A later
-	// read, close or rename failure must not destroy the input needed to retry.
+	// read, close or publication failure must not destroy the input needed to retry.
 	// Once publication succeeds, leftover parts are only cleanup work; they
 	// must not turn an already-published file into a reported merge failure.
 	for i := 1; i <= totalChunks; i++ {
-		_ = os.Remove(filepath.Join(uploadDir, identifier+"."+strconv.Itoa(i)+".part"))
+		_ = os.Remove(uploadPartPath(uploadDir, identifier, i))
 	}
+	_ = os.Remove(filepath.Dir(uploadPartPath(uploadDir, identifier, 1)))
 	return finalPath, nil
 }
 
@@ -891,14 +900,36 @@ func (t *HandlerTask) uploadFiles(c *gin.Context) {
 	key := ""
 	if req.TotalChunks == 1 {
 		key = filepath.Join(uploadDir, filename)
-		if err := c.SaveUploadedFile(uploadFile, key); err != nil {
+		input, err := uploadFile.Open()
+		if err != nil {
+			c.JSON(http.StatusOK, result.Fail(http.StatusInternalServerError, "打开上传文件失败"))
+			return
+		}
+		output, err := os.OpenFile(key, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+		if err != nil {
+			_ = input.Close()
+			if errors.Is(err, os.ErrExist) {
+				c.JSON(http.StatusConflict, result.Fail(http.StatusConflict, "文件已存在，请修改文件名"))
+				return
+			}
 			c.JSON(http.StatusOK, result.Fail(http.StatusInternalServerError, "保存上传文件失败"))
+			return
+		}
+		written, copyErr := io.Copy(output, input)
+		inputCloseErr, outputCloseErr := input.Close(), output.Close()
+		if copyErr != nil || inputCloseErr != nil || outputCloseErr != nil || (uploadFile.Size >= 0 && written != uploadFile.Size) {
+			_ = os.Remove(key) // This request created the destination exclusively.
+			c.JSON(http.StatusOK, result.Fail(http.StatusInternalServerError, "写入上传文件失败"))
 			return
 		}
 	} else {
 		releaseUploadLock := acquireUploadLock(filepath.Join(req.ProjectCode, req.TaskCode, req.Identifier))
 		defer releaseUploadLock()
-		partPath := filepath.Join(uploadDir, req.Identifier+"."+strconv.Itoa(req.ChunkNumber)+".part")
+		partPath := uploadPartPath(uploadDir, req.Identifier, req.ChunkNumber)
+		if err := os.MkdirAll(filepath.Dir(partPath), 0755); err != nil {
+			c.JSON(http.StatusOK, result.Fail(http.StatusInternalServerError, "创建分片目录失败"))
+			return
+		}
 		input, err := uploadFile.Open()
 		if err != nil {
 			c.JSON(http.StatusOK, result.Fail(http.StatusInternalServerError, "打开上传文件失败"))
@@ -931,7 +962,7 @@ func (t *HandlerTask) uploadFiles(c *gin.Context) {
 		// forcing the client to retry the final chunk after an avoidable 400.
 		allPartsReady := true
 		for i := 1; i <= req.TotalChunks; i++ {
-			part := filepath.Join(uploadDir, req.Identifier+"."+strconv.Itoa(i)+".part")
+			part := uploadPartPath(uploadDir, req.Identifier, i)
 			partInfo, statErr := os.Stat(part)
 			if statErr != nil {
 				if os.IsNotExist(statErr) {
@@ -962,7 +993,9 @@ func (t *HandlerTask) uploadFiles(c *gin.Context) {
 
 		finalPath, mergeErr := mergeUploadParts(uploadDir, req.Identifier, filename, req.TotalChunks)
 		if mergeErr != nil {
-			if errors.Is(mergeErr, os.ErrNotExist) {
+			if errors.Is(mergeErr, os.ErrExist) {
+				c.JSON(http.StatusConflict, result.Fail(http.StatusConflict, "文件已存在，请修改文件名"))
+			} else if errors.Is(mergeErr, os.ErrNotExist) {
 				c.JSON(http.StatusOK, result.Fail(http.StatusBadRequest, "分片尚未上传完整"))
 			} else {
 				c.JSON(http.StatusOK, result.Fail(http.StatusInternalServerError, "合并分片失败"))
