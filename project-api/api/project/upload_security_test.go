@@ -115,6 +115,49 @@ func TestMergeUploadPartsCleansTemporaryFileWhenPartIsMissing(t *testing.T) {
 	if _, statErr := os.Stat(filepath.Join(directory, filename+".assembling")); !os.IsNotExist(statErr) {
 		t.Fatalf("temporary assembling file was not removed: %v", statErr)
 	}
+	if content, readErr := os.ReadFile(filepath.Join(directory, identifier+".1.part")); readErr != nil || string(content) != "first" {
+		t.Fatalf("failed merge must preserve the existing part for retry: content=%q, err=%v", content, readErr)
+	}
+}
+
+func TestMergeUploadPartsPreservesPartsWhenPublishFails(t *testing.T) {
+	directory := t.TempDir()
+	identifier := "upload-id"
+	filename := "report.txt"
+	for number, content := range []string{"first", "second"} {
+		part := filepath.Join(directory, identifier+"."+strconv.Itoa(number+1)+".part")
+		if err := os.WriteFile(part, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A directory at the destination forces the final rename to fail after
+	// both parts have been read, without relying on timing or permissions.
+	destination := filepath.Join(directory, filename)
+	if err := os.Mkdir(destination, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if finalPath, err := mergeUploadParts(directory, identifier, filename, 2); err == nil || finalPath != "" {
+		t.Fatalf("merge with a blocked destination = (%q, %v), want a failure", finalPath, err)
+	}
+	for number, want := range []string{"first", "second"} {
+		part := filepath.Join(directory, identifier+"."+strconv.Itoa(number+1)+".part")
+		if content, err := os.ReadFile(part); err != nil || string(content) != want {
+			t.Fatalf("part %d lost after publish failure: content=%q, err=%v", number+1, content, err)
+		}
+	}
+	if _, err := os.Stat(destination + ".assembling"); !os.IsNotExist(err) {
+		t.Fatalf("temporary file survives failed publication: %v", err)
+	}
+	if err := os.Remove(destination); err != nil {
+		t.Fatal(err)
+	}
+	finalPath, err := mergeUploadParts(directory, identifier, filename, 2)
+	if err != nil {
+		t.Fatalf("retry without reuploading parts failed: %v", err)
+	}
+	if content, err := os.ReadFile(finalPath); err != nil || string(content) != "firstsecond" {
+		t.Fatalf("retried content = %q, err=%v", content, err)
+	}
 }
 
 func TestDownloadFileRejectsUnsafePathBeforeServiceCall(t *testing.T) {

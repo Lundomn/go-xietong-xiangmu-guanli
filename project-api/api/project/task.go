@@ -755,10 +755,6 @@ func mergeUploadParts(uploadDir, identifier, filename string, totalChunks int) (
 			}
 			return "", closeErr
 		}
-		if removeErr := os.Remove(part); removeErr != nil && !os.IsNotExist(removeErr) {
-			cleanup()
-			return "", removeErr
-		}
 	}
 	if err = assembled.Close(); err != nil {
 		_ = os.Remove(assemblingPath)
@@ -767,6 +763,13 @@ func mergeUploadParts(uploadDir, identifier, filename string, totalChunks int) (
 	if err = os.Rename(assemblingPath, finalPath); err != nil {
 		_ = os.Remove(assemblingPath)
 		return "", err
+	}
+	// Keep every source part until the complete file is published. A later
+	// read, close or rename failure must not destroy the input needed to retry.
+	// Once publication succeeds, leftover parts are only cleanup work; they
+	// must not turn an already-published file into a reported merge failure.
+	for i := 1; i <= totalChunks; i++ {
+		_ = os.Remove(filepath.Join(uploadDir, identifier+"."+strconv.Itoa(i)+".part"))
 	}
 	return finalPath, nil
 }
