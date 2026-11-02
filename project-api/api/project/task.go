@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/gin-gonic/gin"
 	"github.com/jinzhu/copier"
+	"go.uber.org/zap"
 	"io"
 	"net/http"
 	"os"
@@ -1002,8 +1003,10 @@ func (t *HandlerTask) uploadFiles(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
 	defer cancel()
 	if _, err = TaskServiceClient.SaveTaskFile(ctx, msg); err != nil {
-		// 元数据写入失败时删除已落盘文件，避免留下无法被业务引用的孤儿文件。
-		_ = os.Remove(key)
+		// RPC 超时或断线不能证明服务端未提交附件关联。保留文件和核对线索，
+		// 不在结果未知时做破坏性补偿，也不自动重复创建附件记录。
+		zap.L().Warn("upload metadata result unresolved; preserving file",
+			zap.String("taskCode", req.TaskCode), zap.String("uploadPath", filePath), zap.Error(err))
 		code, message := errs.ParseGrpcError(err)
 		c.JSON(http.StatusOK, result.Fail(code, message))
 		return

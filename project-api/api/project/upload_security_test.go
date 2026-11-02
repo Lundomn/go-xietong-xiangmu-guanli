@@ -1,6 +1,11 @@
 package project
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"mime/multipart"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -8,8 +13,117 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"test.com/project-api/pkg/model"
+	common "test.com/project-common"
+	"test.com/project-grpc/task"
 )
+
+// Simulate a committed attachment whose gRPC acknowledgement is lost. The
+// gateway cannot infer a rollback from the error returned by this client.
+type committedUploadClient struct {
+	task.TaskServiceClient
+	resultError error
+	committed   *task.TaskFileReqMessage
+	saveCalls   int
+}
+
+func (client *committedUploadClient) ReadTask(_ context.Context, request *task.TaskReqMessage, _ ...grpc.CallOption) (*task.TaskMessage, error) {
+	return &task.TaskMessage{Code: request.TaskCode, ProjectCode: "project-code"}, nil
+}
+
+func (client *committedUploadClient) SaveTaskFile(_ context.Context, request *task.TaskFileReqMessage, _ ...grpc.CallOption) (*task.TaskFileResponse, error) {
+	client.committed = request
+	client.saveCalls++
+	if client.resultError != nil {
+		return nil, client.resultError
+	}
+	return &task.TaskFileResponse{}, nil
+}
+
+func TestUploadFilesPreservesCommittedFileWhenAcknowledgementIsLost(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	originalDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(originalDirectory); err != nil {
+			t.Errorf("restore working directory: %v", err)
+		}
+	})
+	originalClient := TaskServiceClient
+	t.Cleanup(func() { TaskServiceClient = originalClient })
+
+	for _, rpcCode := range []codes.Code{codes.DeadlineExceeded, codes.Unavailable} {
+		for _, chunkCount := range []int{1, 2} {
+			t.Run(rpcCode.String()+"/chunks-"+strconv.Itoa(chunkCount), func(t *testing.T) {
+				client := &committedUploadClient{resultError: status.Error(rpcCode, "acknowledgement lost")}
+				TaskServiceClient = client
+				const content = "firstsecond"
+				filename := rpcCode.String() + "-" + strconv.Itoa(chunkCount) + ".txt"
+				for chunk := 1; chunk <= chunkCount; chunk++ {
+					var body bytes.Buffer
+					writer := multipart.NewWriter(&body)
+					for name, value := range map[string]string{
+						"projectCode": "project-code", "taskCode": "task-code",
+						"totalChunks": strconv.Itoa(chunkCount), "chunkNumber": strconv.Itoa(chunk),
+						"totalSize": strconv.Itoa(len(content)), "identifier": filename,
+						"filename": filename,
+					} {
+						if err := writer.WriteField(name, value); err != nil {
+							t.Fatal(err)
+						}
+					}
+					file, err := writer.CreateFormFile("file", filename)
+					if err != nil {
+						t.Fatal(err)
+					}
+					payload := content
+					if chunkCount == 2 {
+						payload = []string{"first", "second"}[chunk-1]
+					}
+					if _, err := file.Write([]byte(payload)); err != nil {
+						t.Fatal(err)
+					}
+					if err := writer.Close(); err != nil {
+						t.Fatal(err)
+					}
+					response := httptest.NewRecorder()
+					requestContext, _ := gin.CreateTestContext(response)
+					requestContext.Request = httptest.NewRequest(http.MethodPost, "/upload", &body)
+					requestContext.Request.Header.Set("Content-Type", writer.FormDataContentType())
+					requestContext.Set("memberId", int64(1))
+					requestContext.Set("organizationCode", "organization-code")
+					(&HandlerTask{}).uploadFiles(requestContext)
+					var result common.Result
+					if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+						t.Fatal(err)
+					}
+					if chunk < chunkCount {
+						if result.Code != 200 || client.saveCalls != 0 {
+							t.Fatalf("incomplete upload: result=%+v, save calls=%d", result, client.saveCalls)
+						}
+					} else if result.Code != common.BusinessCode(rpcCode) {
+						t.Fatalf("result code = %d, want original RPC error %d", result.Code, rpcCode)
+					}
+				}
+				if client.saveCalls != 1 || client.committed == nil {
+					t.Fatalf("metadata save calls = %d, want one committed attachment", client.saveCalls)
+				}
+				actual, err := os.ReadFile(filepath.FromSlash(client.committed.PathName))
+				if err != nil || string(actual) != content {
+					t.Fatalf("committed attachment lost: content=%q, err=%v", actual, err)
+				}
+			})
+		}
+	}
+}
 
 func TestSafeUploadPart(t *testing.T) {
 	tests := []struct {
