@@ -173,6 +173,160 @@ func TestUploadSizeMismatchPreservesPartsBeforePublication(t *testing.T) {
 	}
 }
 
+func TestOutOfOrderUploadChecksAllStoredPartSizes(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previous) })
+	previousClient := TaskServiceClient
+	t.Cleanup(func() { TaskServiceClient = previousClient })
+	for _, aggregate := range []bool{false, true} {
+		t.Run(strconv.FormatBool(aggregate), func(t *testing.T) {
+			client := &committedUploadClient{}
+			TaskServiceClient = client
+			fields := map[string]string{
+				"projectCode": "project-code", "taskCode": "task-code", "filename": "quota-" + strconv.FormatBool(aggregate) + ".txt",
+				"identifier": "quota-" + strconv.FormatBool(aggregate), "totalChunks": "2", "chunkNumber": "2", "totalSize": "6",
+			}
+			want := "oldnew"
+			if aggregate {
+				fields["totalChunks"], fields["chunkNumber"], fields["totalSize"] = "3", "3", "9"
+				if r := uploadChunkForTest(t, fields, "last", 1, "organization-code"); r.Code != 200 {
+					t.Fatalf("last-numbered part rejected: %+v", r)
+				}
+				fields["chunkNumber"] = "2"
+				want = "himidlast"
+			}
+			if r := uploadChunkForTest(t, fields, "toolong", 1, "organization-code"); r.Code != 400 {
+				t.Errorf("out-of-order oversized upload = %+v, want bad request", r)
+			}
+			dir := filepath.Join("upload", "project-code", "task-code", tms.FormatYMD(time.Now()))
+			if _, err := os.Stat(uploadPartPath(dir, fields["identifier"], 2)); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("rejected new part was retained: %v", err)
+			}
+			if aggregate {
+				if got, err := os.ReadFile(uploadPartPath(dir, fields["identifier"], 3)); err != nil || string(got) != "last" {
+					t.Fatalf("accepted other part changed: %q %v", got, err)
+				}
+			}
+			if client.saveCalls != 0 {
+				t.Errorf("incomplete upload saved metadata %d times", client.saveCalls)
+			}
+			parts := []string{"old", "new"}
+			if aggregate {
+				parts = []string{"hi", "mid"}
+			}
+			for i, part := range parts {
+				fields["chunkNumber"] = strconv.Itoa(i + 1)
+				if r := uploadChunkForTest(t, fields, part, 1, "organization-code"); r.Code != 200 {
+					t.Fatalf("correct upload could not continue: %+v", r)
+				}
+			}
+			if client.saveCalls != 1 || client.committed == nil {
+				t.Fatalf("metadata saves=%d", client.saveCalls)
+			}
+			if got, err := os.ReadFile(client.committed.PathName); err != nil || string(got) != want {
+				t.Fatalf("completed upload = %q %v, want %q", got, err, want)
+			}
+		})
+	}
+}
+
+func TestUploadQuotaRejectionDoesNotDeleteExistingPart(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previous) })
+	previousClient := TaskServiceClient
+	t.Cleanup(func() { TaskServiceClient = previousClient })
+	client := &committedUploadClient{}
+	TaskServiceClient = client
+	fields := map[string]string{
+		"projectCode": "project-code", "taskCode": "task-code", "filename": "legacy-quota.txt",
+		"identifier": "legacy-quota", "totalChunks": "3", "chunkNumber": "3", "totalSize": "9",
+	}
+	if r := uploadChunkForTest(t, fields, "old", 1, "organization-code"); r.Code != 200 {
+		t.Fatal(r)
+	}
+	dir := filepath.Join("upload", "project-code", "task-code", tms.FormatYMD(time.Now()))
+	// Model a set admitted by an older version that stopped counting at the
+	// first missing part. Reject it without deleting the replayed original.
+	if err := os.WriteFile(uploadPartPath(dir, "legacy-quota", 2), []byte("toolong"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if r := uploadChunkForTest(t, fields, "old", 1, "organization-code"); r.Code != 400 {
+		t.Errorf("old over-limit set replay = %+v, want bad request", r)
+	}
+	for number, want := range map[int]string{2: "toolong", 3: "old"} {
+		if got, err := os.ReadFile(uploadPartPath(dir, "legacy-quota", number)); err != nil || string(got) != want {
+			t.Errorf("quota rejection deleted saved part %d: %q %v", number, got, err)
+		}
+	}
+	if client.saveCalls != 0 {
+		t.Errorf("invalid upload saved metadata %d times", client.saveCalls)
+	}
+}
+
+func TestOutOfOrderUploadEnforcesGlobalLimitWithoutDeclaredSize(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previous) })
+	previousClient := TaskServiceClient
+	t.Cleanup(func() { TaskServiceClient = previousClient })
+	client := &committedUploadClient{}
+	TaskServiceClient = client
+	fields := map[string]string{
+		"projectCode": "project-code", "taskCode": "task-code", "filename": "global-quota.txt",
+		"identifier": "global-quota", "totalChunks": "3", "chunkNumber": "3", "totalSize": "0",
+	}
+	if r := uploadChunkForTest(t, fields, "old", 1, "organization-code"); r.Code != 200 {
+		t.Fatal(r)
+	}
+	dir := filepath.Join("upload", "project-code", "task-code", tms.FormatYMD(time.Now()))
+	last := uploadPartPath(dir, fields["identifier"], 3)
+	if err := os.MkdirAll(filepath.Dir(last), 0700); err != nil {
+		t.Fatal(err)
+	}
+	// A sparse file exercises the global bound without allocating a large body.
+	f, err := os.Create(last)
+	if err != nil {
+		t.Fatal(err)
+	}
+	truncateErr, closeErr := f.Truncate(maxUploadSize), f.Close()
+	if truncateErr != nil || closeErr != nil {
+		t.Fatalf("prepare stored part: %v %v", truncateErr, closeErr)
+	}
+	fields["chunkNumber"] = "2"
+	if r := uploadChunkForTest(t, fields, "new", 1, "organization-code"); r.Code != 400 {
+		t.Fatalf("global limit bypassed with missing first part: %+v", r)
+	}
+	if _, err := os.Stat(uploadPartPath(dir, fields["identifier"], 2)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("rejected new part retained: %v", err)
+	}
+	if info, err := os.Stat(last); err != nil || info.Size() != maxUploadSize {
+		t.Errorf("previously stored part changed: %v %v", info, err)
+	}
+	if client.saveCalls != 0 {
+		t.Errorf("invalid upload saved metadata %d times", client.saveCalls)
+	}
+}
+
 func TestStoreUploadPartPreservesAcceptedBytesOnReadFailure(t *testing.T) {
 	for _, existing := range []bool{false, true} {
 		for _, failure := range []string{"read", "short"} {
@@ -189,7 +343,7 @@ func TestStoreUploadPartPreservesAcceptedBytesOnReadFailure(t *testing.T) {
 				if failure == "read" {
 					input = io.MultiReader(input, iotest.ErrReader(readError))
 				}
-				err := storeUploadPart(part, input, 3)
+				_, err := storeUploadPart(part, input, 3)
 				if err == nil || (failure == "read" && !errors.Is(err, readError)) {
 					t.Fatalf("storeUploadPart error=%v", err)
 				}

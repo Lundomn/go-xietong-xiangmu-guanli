@@ -803,10 +803,11 @@ func bindUploadContract(partDir string, want uploadContract) error {
 
 // Publish only a completely written chunk. Retries may reuse the same bytes,
 // but cannot truncate or replace an already accepted chunk.
-func storeUploadPart(partPath string, input io.Reader, expectedSize int64) error {
+// The bool reports whether this call created the accepted part.
+func storeUploadPart(partPath string, input io.Reader, expectedSize int64) (bool, error) {
 	output, err := os.CreateTemp(filepath.Dir(partPath), ".incoming-*")
 	if err != nil {
-		return err
+		return false, err
 	}
 	temporaryPath := output.Name()
 	defer func() {
@@ -816,44 +817,46 @@ func storeUploadPart(partPath string, input io.Reader, expectedSize int64) error
 	hash := sha256.New()
 	written, err := io.Copy(io.MultiWriter(output, hash), input)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if expectedSize >= 0 && written != expectedSize {
-		return errors.New("uploaded chunk size does not match request")
+		return false, errors.New("uploaded chunk size does not match request")
 	}
 	if err := output.Sync(); err != nil {
-		return err
+		return false, err
 	}
 	if err := output.Close(); err != nil {
-		return err
+		return false, err
 	}
-	if err := os.Link(temporaryPath, partPath); !errors.Is(err, os.ErrExist) {
-		return err
+	if err := os.Link(temporaryPath, partPath); err == nil {
+		return true, nil
+	} else if !errors.Is(err, os.ErrExist) {
+		return false, err
 	}
 	info, err := os.Lstat(partPath)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !info.Mode().IsRegular() || info.Size() != written {
-		return errUploadPartConflict
+		return false, errUploadPartConflict
 	}
 	existing, err := os.Open(partPath)
 	if err != nil {
-		return err
+		return false, err
 	}
 	existingHash := sha256.New()
 	_, readErr := io.Copy(existingHash, existing)
 	closeErr := existing.Close()
 	if readErr != nil {
-		return readErr
+		return false, readErr
 	}
 	if closeErr != nil {
-		return closeErr
+		return false, closeErr
 	}
 	if !bytes.Equal(hash.Sum(nil), existingHash.Sum(nil)) {
-		return errUploadPartConflict
+		return false, errUploadPartConflict
 	}
-	return nil
+	return false, nil
 }
 
 func mergeUploadParts(uploadDir, identifier, filename string, totalChunks int, expectedSize int64) (string, error) {
@@ -1077,7 +1080,7 @@ func (t *HandlerTask) uploadFiles(c *gin.Context) {
 			c.JSON(http.StatusOK, result.Fail(http.StatusInternalServerError, "打开上传文件失败"))
 			return
 		}
-		storeErr := storeUploadPart(partPath, input, uploadFile.Size)
+		partCreated, storeErr := storeUploadPart(partPath, input, uploadFile.Size)
 		inputCloseErr := input.Close()
 		if errors.Is(storeErr, errUploadPartConflict) {
 			c.JSON(http.StatusConflict, result.Fail(http.StatusConflict, "分片内容已变化，请重新发起上传"))
@@ -1106,14 +1109,16 @@ func (t *HandlerTask) uploadFiles(c *gin.Context) {
 			if statErr != nil {
 				if os.IsNotExist(statErr) {
 					allPartsReady = false
-					break
+					continue // Later-numbered parts still count toward the limit.
 				}
 				c.JSON(http.StatusOK, result.Fail(http.StatusInternalServerError, "检查分片失败"))
 				return
 			}
 			totalPartSize += partInfo.Size()
 			if totalPartSize > maxAllowedSize {
-				_ = os.Remove(partPath)
+				if partCreated {
+					_ = os.Remove(partPath)
+				}
 				c.JSON(http.StatusBadRequest, result.Fail(http.StatusBadRequest, "分片总大小超过限制"))
 				return
 			}
