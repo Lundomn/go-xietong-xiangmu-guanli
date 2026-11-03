@@ -127,6 +127,52 @@ func TestUploadChunkReplayCannotReplaceAcceptedContent(t *testing.T) {
 	}
 }
 
+func TestUploadSizeMismatchPreservesPartsBeforePublication(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previous) })
+	previousClient := TaskServiceClient
+	t.Cleanup(func() { TaskServiceClient = previousClient })
+	client := &committedUploadClient{}
+	TaskServiceClient = client
+	fields := map[string]string{
+		"projectCode": "project-code", "taskCode": "task-code", "filename": "size.txt",
+		"identifier": "size-check", "totalChunks": "2", "chunkNumber": "1", "totalSize": "6",
+	}
+	if result := uploadChunkForTest(t, fields, "ab", 1, "organization-code"); result.Code != 200 {
+		t.Fatalf("first chunk rejected: %+v", result)
+	}
+	fields["chunkNumber"] = "2"
+	if result := uploadChunkForTest(t, fields, "cd", 1, "organization-code"); result.Code != 400 {
+		t.Fatalf("size mismatch = %+v, want bad request", result)
+	}
+	dir := filepath.Join("upload", "project-code", "task-code", tms.FormatYMD(time.Now()))
+	for i, want := range []string{"ab", "cd"} {
+		part := uploadPartPath(dir, "size-check", i+1)
+		if got, err := os.ReadFile(part); err != nil || string(got) != want {
+			t.Errorf("size mismatch destroyed part %d: %q %v", i+1, got, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(uploadPartPath(dir, "size-check", 1)), "manifest.json")); err != nil {
+		t.Errorf("size mismatch destroyed original contract: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "size.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("size mismatch left a published attachment: %v", err)
+	}
+	if client.saveCalls != 0 {
+		t.Errorf("size mismatch created metadata %d times", client.saveCalls)
+	}
+	if leftovers, _ := filepath.Glob(filepath.Join(dir, ".assembling-*")); len(leftovers) != 0 {
+		t.Errorf("failed merge leaked temporary files: %v", leftovers)
+	}
+}
+
 func TestStoreUploadPartPreservesAcceptedBytesOnReadFailure(t *testing.T) {
 	for _, existing := range []bool{false, true} {
 		for _, failure := range []string{"read", "short"} {
@@ -558,7 +604,7 @@ func TestMergeUploadPartsPreservesChunkOrderAndCleansParts(t *testing.T) {
 		}
 	}
 
-	finalPath, err := mergeUploadParts(directory, identifier, filename, 3)
+	finalPath, err := mergeUploadParts(directory, identifier, filename, 3, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -591,7 +637,7 @@ func TestMergeUploadPartsCleansTemporaryFileWhenPartIsMissing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	finalPath, err := mergeUploadParts(directory, identifier, filename, 2)
+	finalPath, err := mergeUploadParts(directory, identifier, filename, 2, 0)
 	if err == nil {
 		t.Fatal("mergeUploadParts succeeded with a missing part")
 	}
@@ -625,7 +671,7 @@ func TestMergeUploadPartsPreservesPartsWhenPublishFails(t *testing.T) {
 	if err := os.Mkdir(destination, 0755); err != nil {
 		t.Fatal(err)
 	}
-	if finalPath, err := mergeUploadParts(directory, identifier, filename, 2); err == nil || finalPath != "" {
+	if finalPath, err := mergeUploadParts(directory, identifier, filename, 2, 0); err == nil || finalPath != "" {
 		t.Fatalf("merge with a blocked destination = (%q, %v), want a failure", finalPath, err)
 	}
 	for number, want := range []string{"first", "second"} {
@@ -640,7 +686,7 @@ func TestMergeUploadPartsPreservesPartsWhenPublishFails(t *testing.T) {
 	if err := os.Remove(destination); err != nil {
 		t.Fatal(err)
 	}
-	finalPath, err := mergeUploadParts(directory, identifier, filename, 2)
+	finalPath, err := mergeUploadParts(directory, identifier, filename, 2, 0)
 	if err != nil {
 		t.Fatalf("retry without reuploading parts failed: %v", err)
 	}

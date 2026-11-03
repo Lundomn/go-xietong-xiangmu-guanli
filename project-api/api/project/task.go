@@ -738,6 +738,7 @@ func uploadPartPath(uploadDir, identifier string, number int) string {
 
 var errUploadContractConflict = errors.New("upload parameters do not match the saved upload")
 var errUploadPartConflict = errors.New("upload chunk does not match the saved content")
+var errUploadSizeMismatch = errors.New("upload size does not match the saved contract")
 
 type uploadContract struct {
 	Version          int
@@ -855,7 +856,7 @@ func storeUploadPart(partPath string, input io.Reader, expectedSize int64) error
 	return nil
 }
 
-func mergeUploadParts(uploadDir, identifier, filename string, totalChunks int) (string, error) {
+func mergeUploadParts(uploadDir, identifier, filename string, totalChunks int, expectedSize int64) (string, error) {
 	finalPath := filepath.Join(uploadDir, filename)
 	assembled, err := os.CreateTemp(uploadDir, ".assembling-*")
 	if err != nil {
@@ -867,6 +868,7 @@ func mergeUploadParts(uploadDir, identifier, filename string, totalChunks int) (
 		_ = assembled.Close()
 		_ = os.Remove(assemblingPath)
 	}
+	var totalSize int64
 	for i := 1; i <= totalChunks; i++ {
 		part := uploadPartPath(uploadDir, identifier, i)
 		inputPart, openErr := os.Open(part)
@@ -874,7 +876,7 @@ func mergeUploadParts(uploadDir, identifier, filename string, totalChunks int) (
 			cleanup()
 			return "", openErr
 		}
-		_, copyErr := io.Copy(assembled, inputPart)
+		written, copyErr := io.Copy(assembled, inputPart)
 		closeErr := inputPart.Close()
 		if copyErr != nil || closeErr != nil {
 			cleanup()
@@ -883,6 +885,13 @@ func mergeUploadParts(uploadDir, identifier, filename string, totalChunks int) (
 			}
 			return "", closeErr
 		}
+		totalSize += written
+	}
+	// Validate before publication and before deleting any source part. A later
+	// handler check cannot recover inputs already removed by a successful merge.
+	if expectedSize > 0 && totalSize != expectedSize {
+		cleanup()
+		return "", errUploadSizeMismatch
 	}
 	if err = assembled.Close(); err != nil {
 		_ = os.Remove(assemblingPath)
@@ -1121,9 +1130,11 @@ func (t *HandlerTask) uploadFiles(c *gin.Context) {
 			return
 		}
 
-		finalPath, mergeErr := mergeUploadParts(uploadDir, req.Identifier, filename, req.TotalChunks)
+		finalPath, mergeErr := mergeUploadParts(uploadDir, req.Identifier, filename, req.TotalChunks, int64(req.TotalSize))
 		if mergeErr != nil {
-			if errors.Is(mergeErr, os.ErrExist) {
+			if errors.Is(mergeErr, errUploadSizeMismatch) {
+				c.JSON(http.StatusBadRequest, result.Fail(http.StatusBadRequest, "文件大小与分片声明不一致"))
+			} else if errors.Is(mergeErr, os.ErrExist) {
 				c.JSON(http.StatusConflict, result.Fail(http.StatusConflict, "文件已存在，请修改文件名"))
 			} else if errors.Is(mergeErr, os.ErrNotExist) {
 				c.JSON(http.StatusOK, result.Fail(http.StatusBadRequest, "分片尚未上传完整"))
