@@ -2,6 +2,7 @@ package project
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"github.com/gin-gonic/gin"
 	"github.com/jinzhu/copier"
@@ -733,6 +734,69 @@ func uploadPartPath(uploadDir, identifier string, number int) string {
 	return filepath.Join(uploadDir, ".parts", identifier, strconv.Itoa(number)+".part")
 }
 
+var errUploadContractConflict = errors.New("upload parameters do not match the saved upload")
+
+type uploadContract struct {
+	Version          int
+	Filename         string
+	TotalChunks      int
+	TotalSize        int
+	MemberID         int64
+	OrganizationCode string
+}
+
+// Bind the active upload before replacing any chunk. A restart or a different
+// authorized member must not reinterpret parts using different parameters.
+func bindUploadContract(partDir string, want uploadContract) error {
+	manifest := filepath.Join(partDir, "manifest.json")
+	read := func() error {
+		body, err := os.ReadFile(manifest)
+		if err != nil {
+			return err
+		}
+		var saved uploadContract
+		if err := json.Unmarshal(body, &saved); err != nil {
+			return err
+		}
+		if saved != want {
+			return errUploadContractConflict
+		}
+		return nil
+	}
+	if err := read(); !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	entries, err := os.ReadDir(partDir)
+	if err != nil {
+		return err
+	}
+	if len(entries) != 0 {
+		// Parts without an original contract cannot safely be adopted.
+		return errUploadContractConflict
+	}
+	body, err := json.Marshal(want)
+	if err != nil {
+		return err
+	}
+	file, err := os.OpenFile(manifest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if errors.Is(err, os.ErrExist) {
+		return read()
+	}
+	if err != nil {
+		return err
+	}
+	_, writeErr := file.Write(body)
+	syncErr := file.Sync()
+	closeErr := file.Close()
+	if writeErr != nil {
+		return writeErr
+	}
+	if syncErr != nil {
+		return syncErr
+	}
+	return closeErr
+}
+
 func mergeUploadParts(uploadDir, identifier, filename string, totalChunks int) (string, error) {
 	finalPath := filepath.Join(uploadDir, filename)
 	assembled, err := os.CreateTemp(uploadDir, ".assembling-*")
@@ -780,6 +844,7 @@ func mergeUploadParts(uploadDir, identifier, filename string, totalChunks int) (
 	for i := 1; i <= totalChunks; i++ {
 		_ = os.Remove(uploadPartPath(uploadDir, identifier, i))
 	}
+	_ = os.Remove(filepath.Join(filepath.Dir(uploadPartPath(uploadDir, identifier, 1)), "manifest.json"))
 	_ = os.Remove(filepath.Dir(uploadPartPath(uploadDir, identifier, 1)))
 	return finalPath, nil
 }
@@ -928,6 +993,16 @@ func (t *HandlerTask) uploadFiles(c *gin.Context) {
 		partPath := uploadPartPath(uploadDir, req.Identifier, req.ChunkNumber)
 		if err := os.MkdirAll(filepath.Dir(partPath), 0755); err != nil {
 			c.JSON(http.StatusOK, result.Fail(http.StatusInternalServerError, "创建分片目录失败"))
+			return
+		}
+		contract := uploadContract{Version: 1, Filename: filename, TotalChunks: req.TotalChunks, TotalSize: req.TotalSize,
+			MemberID: c.GetInt64("memberId"), OrganizationCode: c.GetString("organizationCode")}
+		if err := bindUploadContract(filepath.Dir(partPath), contract); err != nil {
+			if errors.Is(err, errUploadContractConflict) {
+				c.JSON(http.StatusConflict, result.Fail(http.StatusConflict, "上传信息已变化，请重新发起上传"))
+			} else {
+				c.JSON(http.StatusInternalServerError, result.Fail(http.StatusInternalServerError, "无法核对原上传信息"))
+			}
 			return
 		}
 		input, err := uploadFile.Open()

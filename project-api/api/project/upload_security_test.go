@@ -45,6 +45,142 @@ func (client *committedUploadClient) SaveTaskFile(_ context.Context, request *ta
 	return &task.TaskFileResponse{}, nil
 }
 
+func uploadChunkForTest(t *testing.T, fields map[string]string, content string, memberID int64, organization string) common.Result {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	for key, value := range fields {
+		if err := writer.WriteField(key, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	file, err := writer.CreateFormFile("file", fields["filename"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Write([]byte(content)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(response)
+	c.Request = httptest.NewRequest(http.MethodPost, "/upload", &body)
+	c.Request.Header.Set("Content-Type", writer.FormDataContentType())
+	c.Set("memberId", memberID)
+	c.Set("organizationCode", organization)
+	(&HandlerTask{}).uploadFiles(c)
+	var result common.Result
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
+func TestUploadIDRejectsChangedContractBeforeReplacingChunks(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previous) })
+	previousClient := TaskServiceClient
+	t.Cleanup(func() { TaskServiceClient = previousClient })
+	for _, change := range []string{"filename", "totalChunks", "totalSize", "member", "organization"} {
+		t.Run(change, func(t *testing.T) {
+			client := &committedUploadClient{}
+			TaskServiceClient = client
+			fields := map[string]string{
+				"projectCode": "project-code", "taskCode": "task-code", "filename": change + ".txt",
+				"identifier": "contract-" + change, "totalChunks": "2", "chunkNumber": "1", "totalSize": "6",
+			}
+			if result := uploadChunkForTest(t, fields, "old", 1, "organization-code"); result.Code != 200 {
+				t.Fatalf("first chunk rejected: %+v", result)
+			}
+			changed := make(map[string]string)
+			for key, value := range fields {
+				changed[key] = value
+			}
+			member, org := int64(1), "organization-code"
+			switch change {
+			case "filename":
+				changed[change] = "other.txt"
+			case "totalChunks":
+				changed[change] = "3"
+			case "totalSize":
+				changed[change] = "8"
+			case "member":
+				member = 2
+			case "organization":
+				org = "other-organization"
+			}
+			if result := uploadChunkForTest(t, changed, "bad", member, org); result.Code != 409 {
+				t.Errorf("changed upload contract = %+v, want conflict", result)
+			}
+			part := uploadPartPath(filepath.Join("upload", "project-code", "task-code", tms.FormatYMD(time.Now())), fields["identifier"], 1)
+			if got, err := os.ReadFile(part); err != nil || string(got) != "old" {
+				t.Errorf("conflicting request replaced old chunk: %q %v", got, err)
+			}
+			fields["chunkNumber"] = "2"
+			if result := uploadChunkForTest(t, fields, "new", 1, "organization-code"); result.Code != 200 {
+				t.Fatalf("original upload did not resume: %+v", result)
+			}
+			if client.saveCalls != 1 || client.committed == nil {
+				t.Fatalf("metadata saves=%d", client.saveCalls)
+			}
+			if got, err := os.ReadFile(client.committed.PathName); err != nil || string(got) != "oldnew" {
+				t.Errorf("resumed upload mixed content: %q %v", got, err)
+			}
+		})
+	}
+}
+
+func TestUploadIDRejectsUnknownOriginalContract(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previous) })
+	previousClient := TaskServiceClient
+	t.Cleanup(func() { TaskServiceClient = previousClient })
+	for _, state := range []string{"missing", "corrupt"} {
+		t.Run(state, func(t *testing.T) {
+			client := &committedUploadClient{}
+			TaskServiceClient = client
+			fields := map[string]string{
+				"projectCode": "project-code", "taskCode": "task-code", "filename": state + ".txt",
+				"identifier": "unknown-" + state, "totalChunks": "2", "chunkNumber": "1", "totalSize": "6",
+			}
+			part := uploadPartPath(filepath.Join("upload", "project-code", "task-code", tms.FormatYMD(time.Now())), fields["identifier"], 1)
+			if err := os.MkdirAll(filepath.Dir(part), 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(part, []byte("old"), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if state == "corrupt" {
+				if err := os.WriteFile(filepath.Join(filepath.Dir(part), "manifest.json"), []byte("{"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if result := uploadChunkForTest(t, fields, "bad", 1, "organization-code"); result.Code == 200 {
+				t.Errorf("unverified old chunks were reused: %+v", result)
+			}
+			if got, err := os.ReadFile(part); err != nil || string(got) != "old" || client.saveCalls != 0 {
+				t.Fatalf("unknown original changed: content=%q err=%v metadata=%d", got, err, client.saveCalls)
+			}
+		})
+	}
+}
+
 func TestUploadFilesCannotOverwriteExistingAttachment(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	originalDirectory, err := os.Getwd()
