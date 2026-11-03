@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -76,6 +79,88 @@ func uploadChunkForTest(t *testing.T, fields map[string]string, content string, 
 		t.Fatal(err)
 	}
 	return result
+}
+
+func TestUploadChunkReplayCannotReplaceAcceptedContent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previous) })
+	previousClient := TaskServiceClient
+	t.Cleanup(func() { TaskServiceClient = previousClient })
+	client := &committedUploadClient{}
+	TaskServiceClient = client
+	fields := map[string]string{
+		"projectCode": "project-code", "taskCode": "task-code", "filename": "replay.txt",
+		"identifier": "replay", "totalChunks": "2", "chunkNumber": "1", "totalSize": "6",
+	}
+	if result := uploadChunkForTest(t, fields, "old", 1, "organization-code"); result.Code != 200 {
+		t.Fatalf("first chunk rejected: %+v", result)
+	}
+	if result := uploadChunkForTest(t, fields, "old", 1, "organization-code"); result.Code != 200 {
+		t.Fatalf("identical replay rejected: %+v", result)
+	}
+	if result := uploadChunkForTest(t, fields, "bad", 1, "organization-code"); result.Code != 409 {
+		t.Errorf("different content for accepted chunk = %+v, want conflict", result)
+	}
+	part := uploadPartPath(filepath.Join("upload", "project-code", "task-code", tms.FormatYMD(time.Now())), "replay", 1)
+	if got, err := os.ReadFile(part); err != nil || string(got) != "old" {
+		t.Errorf("accepted chunk replaced: %q %v", got, err)
+	}
+	if client.saveCalls != 0 {
+		t.Errorf("incomplete upload saved metadata %d times", client.saveCalls)
+	}
+	fields["chunkNumber"] = "2"
+	if result := uploadChunkForTest(t, fields, "new", 1, "organization-code"); result.Code != 200 {
+		t.Fatalf("original upload did not complete: %+v", result)
+	}
+	if client.saveCalls != 1 || client.committed == nil {
+		t.Fatalf("metadata saves=%d", client.saveCalls)
+	}
+	if got, err := os.ReadFile(client.committed.PathName); err != nil || string(got) != "oldnew" {
+		t.Errorf("replay corrupted merged attachment: %q %v", got, err)
+	}
+}
+
+func TestStoreUploadPartPreservesAcceptedBytesOnReadFailure(t *testing.T) {
+	for _, existing := range []bool{false, true} {
+		for _, failure := range []string{"read", "short"} {
+			t.Run(strconv.FormatBool(existing)+"/"+failure, func(t *testing.T) {
+				dir := t.TempDir()
+				part := filepath.Join(dir, "1.part")
+				if existing {
+					if err := os.WriteFile(part, []byte("old"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				readError := errors.New("input failed after partial content")
+				var input io.Reader = bytes.NewBufferString("ba")
+				if failure == "read" {
+					input = io.MultiReader(input, iotest.ErrReader(readError))
+				}
+				err := storeUploadPart(part, input, 3)
+				if err == nil || (failure == "read" && !errors.Is(err, readError)) {
+					t.Fatalf("storeUploadPart error=%v", err)
+				}
+				got, err := os.ReadFile(part)
+				if existing {
+					if err != nil || string(got) != "old" {
+						t.Errorf("accepted content changed: %q %v", got, err)
+					}
+				} else if !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("failed new chunk was published: %q %v", got, err)
+				}
+				if leftovers, _ := filepath.Glob(filepath.Join(dir, ".incoming-*")); len(leftovers) != 0 {
+					t.Errorf("failed write leaked temporary inputs: %v", leftovers)
+				}
+			})
+		}
+	}
 }
 
 func TestUploadIDRejectsChangedContractBeforeReplacingChunks(t *testing.T) {

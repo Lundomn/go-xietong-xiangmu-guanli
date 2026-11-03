@@ -1,7 +1,9 @@
 package project
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"github.com/gin-gonic/gin"
@@ -735,6 +737,7 @@ func uploadPartPath(uploadDir, identifier string, number int) string {
 }
 
 var errUploadContractConflict = errors.New("upload parameters do not match the saved upload")
+var errUploadPartConflict = errors.New("upload chunk does not match the saved content")
 
 type uploadContract struct {
 	Version          int
@@ -795,6 +798,61 @@ func bindUploadContract(partDir string, want uploadContract) error {
 		return syncErr
 	}
 	return closeErr
+}
+
+// Publish only a completely written chunk. Retries may reuse the same bytes,
+// but cannot truncate or replace an already accepted chunk.
+func storeUploadPart(partPath string, input io.Reader, expectedSize int64) error {
+	output, err := os.CreateTemp(filepath.Dir(partPath), ".incoming-*")
+	if err != nil {
+		return err
+	}
+	temporaryPath := output.Name()
+	defer func() {
+		_ = output.Close()
+		_ = os.Remove(temporaryPath)
+	}()
+	hash := sha256.New()
+	written, err := io.Copy(io.MultiWriter(output, hash), input)
+	if err != nil {
+		return err
+	}
+	if expectedSize >= 0 && written != expectedSize {
+		return errors.New("uploaded chunk size does not match request")
+	}
+	if err := output.Sync(); err != nil {
+		return err
+	}
+	if err := output.Close(); err != nil {
+		return err
+	}
+	if err := os.Link(temporaryPath, partPath); !errors.Is(err, os.ErrExist) {
+		return err
+	}
+	info, err := os.Lstat(partPath)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Size() != written {
+		return errUploadPartConflict
+	}
+	existing, err := os.Open(partPath)
+	if err != nil {
+		return err
+	}
+	existingHash := sha256.New()
+	_, readErr := io.Copy(existingHash, existing)
+	closeErr := existing.Close()
+	if readErr != nil {
+		return readErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	if !bytes.Equal(hash.Sum(nil), existingHash.Sum(nil)) {
+		return errUploadPartConflict
+	}
+	return nil
 }
 
 func mergeUploadParts(uploadDir, identifier, filename string, totalChunks int) (string, error) {
@@ -1010,16 +1068,13 @@ func (t *HandlerTask) uploadFiles(c *gin.Context) {
 			c.JSON(http.StatusOK, result.Fail(http.StatusInternalServerError, "打开上传文件失败"))
 			return
 		}
-		output, err := os.OpenFile(partPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
-		if err != nil {
-			_ = input.Close()
-			c.JSON(http.StatusOK, result.Fail(http.StatusInternalServerError, "保存分片失败"))
+		storeErr := storeUploadPart(partPath, input, uploadFile.Size)
+		inputCloseErr := input.Close()
+		if errors.Is(storeErr, errUploadPartConflict) {
+			c.JSON(http.StatusConflict, result.Fail(http.StatusConflict, "分片内容已变化，请重新发起上传"))
 			return
 		}
-		written, copyErr := io.Copy(output, input)
-		inputCloseErr := input.Close()
-		outputCloseErr := output.Close()
-		if copyErr != nil || inputCloseErr != nil || outputCloseErr != nil || (uploadFile.Size >= 0 && written != uploadFile.Size) {
+		if storeErr != nil || inputCloseErr != nil {
 			c.JSON(http.StatusOK, result.Fail(http.StatusInternalServerError, "写入分片失败"))
 			return
 		}
