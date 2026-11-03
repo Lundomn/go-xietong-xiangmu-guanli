@@ -1237,11 +1237,6 @@ func (t *TaskService) SaveTaskFile(ctx context.Context, msg *task.TaskFileReqMes
 		FileUrl:          msg.FileUrl,
 		DeletedTime:      0,
 	}
-	err = t.fileRepo.Save(ctx, f)
-	if err != nil {
-		zap.L().Error("project task SaveTaskFile fileRepo.Save error", zap.Error(err))
-		return nil, errs.GrpcError(model.DBError)
-	}
 	//存入source_link
 	sl := &data.SourceLink{
 		SourceType:       "file",
@@ -1253,12 +1248,9 @@ func (t *TaskService) SaveTaskFile(ctx context.Context, msg *task.TaskFileReqMes
 		CreateTime:       time.Now().UnixMilli(),
 		Sort:             0,
 	}
-	err = t.sourceLinkRepo.Save(ctx, sl)
+	err = t.fileRepo.SaveWithLink(ctx, f, sl)
 	if err != nil {
-		zap.L().Error("project task SaveTaskFile sourceLinkRepo.Save error", zap.Error(err))
-		if cleanupErr := t.fileRepo.Delete(ctx, f.Id); cleanupErr != nil {
-			zap.L().Error("project task SaveTaskFile file cleanup error", zap.Error(cleanupErr), zap.Int64("fileId", f.Id))
-		}
+		zap.L().Error("project task SaveTaskFile metadata save error", zap.Error(err))
 		return nil, errs.GrpcError(model.DBError)
 	}
 	return &task.TaskFileResponse{}, nil

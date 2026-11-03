@@ -2,6 +2,7 @@ package dao
 
 import (
 	"context"
+	"test.com/project-project/internal/attachments"
 	"test.com/project-project/internal/data"
 	"test.com/project-project/internal/database/gorms"
 )
@@ -19,6 +20,10 @@ func (f *FileDao) FindByIds(ctx context.Context, ids []int64) (list []*data.File
 func (f *FileDao) Save(ctx context.Context, file *data.File) error {
 	err := f.conn.Session(ctx).Save(&file).Error
 	return err
+}
+
+func (f *FileDao) SaveWithLink(ctx context.Context, file *data.File, link *data.SourceLink) error {
+	return attachments.Save(ctx, f.conn.Session(ctx), file, link)
 }
 
 func (f *FileDao) Delete(ctx context.Context, id int64) error {
